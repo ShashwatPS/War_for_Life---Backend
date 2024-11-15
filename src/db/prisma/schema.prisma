@@ -1,0 +1,67 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum BuffDebuffType {
+  LOCK_ONE_TEAM
+  EXTRA_QUESTION
+  QUESTION_SKIP
+  LOCK_ALL_EXCEPT_ONE
+}
+
+model Team {
+  id              String       @id @default(cuid())
+  teamName        String       @unique
+  currentZoneId   String?
+  currentZone     Zone?        @relation(fields: [currentZoneId], references: [id], onDelete: Cascade)
+  members         User[]
+  password        String
+  capturedZones   Zone[]       @relation("CapturedZones")
+  buffsDebuffs    BuffDebuff[] @relation("appliedBy")
+  appliedBuffs    BuffDebuff[] @relation("appliedTo")
+  hasCapturedZone Boolean      @default(false)
+  isLocked        Boolean      @default(false)
+}
+
+model User {
+  id           String @id @default(cuid())
+  teamId       String
+  enrollmentNo String @unique
+  name         String
+  Team         Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+}
+
+model Zone {
+  id           String       @id @default(cuid())
+  name         String       @unique
+  capturedById String?
+  capturedBy   Team?        @relation("CapturedZones", fields: [capturedById], references: [id], onDelete: SetNull)
+  buffsDebuffs BuffDebuff[]
+  isLocked     Boolean      @default(false)
+  Team         Team[]
+}
+
+model BuffDebuff {
+  id          String         @id @default(cuid())
+  appliedById String
+  appliedToId String
+  type        BuffDebuffType
+  expiresAt   DateTime
+  phase       Int // New: phase in which this buff/debuff is active
+  appliedBy   Team           @relation("appliedBy", fields: [appliedById], references: [id], onDelete: Cascade)
+  appliedTo   Team           @relation("appliedTo", fields: [appliedToId], references: [id], onDelete: Cascade)
+  zoneId      String?
+  Zone        Zone?          @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+}
+
+model Phase {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  isActive  Boolean
+  startTime DateTime?
+}
