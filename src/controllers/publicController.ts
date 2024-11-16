@@ -65,8 +65,8 @@ export const startPhase: RequestHandler = async (req, res): Promise<any> => {
 };
 
 export const getNextQuestion: RequestHandler = async (req, res): Promise<any> => {
-    const { teamId, zoneId } = req.params;
-    
+    const { teamId, zoneId } = req.body;
+
     const team = await pclient.team.findUnique({
         where: { id: teamId },
         include: {
@@ -119,7 +119,7 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             });
             break;
         }
-        
+
         case 'PHASE_2': {
             // Phase 2 remains unchanged - not zone specific
             question = await pclient.question.findFirst({
@@ -139,7 +139,7 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             });
             break;
         }
-        
+
         case 'PHASE_3': {
             question = await pclient.question.findFirst({
                 where: {
@@ -170,13 +170,19 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
     }
 
     if (question) {
+        // Update the team's current question ID
         await pclient.team.update({
             where: { id: teamId },
             data: { currentQuestionId: question.id }
         });
-    }
+        // Destructure the question to remove the correctAnswer field
+        const { correctAnswer, ...filteredQuestion } = question;
 
-    return res.json(question);
+        // Return the filtered question without correctAnswer
+        return res.json(filteredQuestion);
+    } else {
+        return res.status(404).json({ error: 'No more questions' });
+    }
 };
 
 type BuffDurations = {
@@ -214,7 +220,7 @@ export const applyBuffDebuff: RequestHandler = async (req, res): Promise<any> =>
 
     let expiresAt = new Date();
     const wss = getSocket();
-    
+
     try {
         switch (type) {
             case 'LOCK_ONE_TEAM':

@@ -41,4 +41,7 @@ router.post("/admin/teams/unlock-all", typedHandler(publicController.adminUnlock
 router.post("/add-phase-question", typedHandler(publicController.addPhaseQuestion));
 router.post("/leaderboard", typedHandler(publicController.getLeaderboard));
 router.post("/admin/change-phase", typedHandler(publicController.changePhase));
+router.post("/admin/zones/create", typedHandler(publicController.createZone));
+router.post("/admin/zones/update", typedHandler(publicController.updateZone));
+router.post("/admin/phases/create", typedHandler(publicController.createPhase));
 exports.default = router;

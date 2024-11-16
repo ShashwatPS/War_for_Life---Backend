@@ -1,0 +1,11 @@
+
+// ...existing code...
+model Zone {
+    id             String       @id @default(uuid())    
+    name           String
+    description    String?      // Add this field
+    order         Int          @default(1)
+    phase1Complete Boolean     @default(false)
+    // ...existing code...
+}
+// ...existing code...

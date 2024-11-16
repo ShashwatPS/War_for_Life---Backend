@@ -8,34 +8,45 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __rest = (this && this.__rest) || function (s, e) {
+    var t = {};
+    for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+        t[p] = s[p];
+    if (s != null && typeof Object.getOwnPropertySymbols === "function")
+        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+            if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                t[p[i]] = s[p[i]];
+        }
+    return t;
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
-const client_1 = require("@prisma/client");
+exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
 const socketInstance_1 = require("../services/socketInstance");
-const client_2 = __importDefault(require("../db/client"));
+const client_1 = __importDefault(require("../db/client"));
 const socketService_1 = require("../services/socketService");
 const buffDebuffs_1 = require("../helpers/buffDebuffs");
+const ws_1 = require("ws");
 const startPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { phase } = req.body;
     const wss = (0, socketInstance_1.getSocket)();
-    yield client_2.default.phase.updateMany({
+    yield client_1.default.phase.updateMany({
         data: { isActive: false },
     });
-    const updatedPhase = yield client_2.default.phase.update({
+    const updatedPhase = yield client_1.default.phase.update({
         where: { phase },
         data: {
             isActive: true,
             startTime: new Date(),
         },
     });
-    yield client_2.default.team.updateMany({
+    yield client_1.default.team.updateMany({
         data: { currentPhase: phase },
     });
     wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
+        if (client.readyState === ws_1.WebSocket.OPEN) {
             client.send(JSON.stringify({ event: 'phase-change', data: { phase, startTime: updatedPhase.startTime } }));
         }
     });
@@ -43,8 +54,8 @@ const startPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
 });
 exports.startPhase = startPhase;
 const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { teamId, zoneId } = req.params;
-    const team = yield client_2.default.team.findUnique({
+    const { teamId, zoneId } = req.body;
+    const team = yield client_1.default.team.findUnique({
         where: { id: teamId },
         include: {
             answeredQuestions: true,
@@ -61,8 +72,15 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
             if (!zoneId) {
                 return res.status(400).json({ error: 'Zone ID required for Phase 1 questions' });
             }
+            // Check if zone is already completed by another team
+            const zone = yield client_1.default.zone.findUnique({
+                where: { id: zoneId }
+            });
+            if ((zone === null || zone === void 0 ? void 0 : zone.phase1Complete) && zone.capturedById !== teamId) {
+                return res.status(400).json({ error: 'Zone is already captured' });
+            }
             // Get questions specific to the requested zone that team hasn't answered yet
-            question = yield client_2.default.question.findFirst({
+            question = yield client_1.default.question.findFirst({
                 where: {
                     type: 'ZONE_SPECIFIC',
                     zoneId: zoneId,
@@ -85,7 +103,7 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
         }
         case 'PHASE_2': {
             // Phase 2 remains unchanged - not zone specific
-            question = yield client_2.default.question.findFirst({
+            question = yield client_1.default.question.findFirst({
                 where: {
                     type: 'ZONE_CAPTURE',
                     isUsed: false,
@@ -103,7 +121,7 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
             break;
         }
         case 'PHASE_3': {
-            question = yield client_2.default.question.findFirst({
+            question = yield client_1.default.question.findFirst({
                 where: {
                     id: {
                         in: team.extraQuestions.map(q => q.id)
@@ -111,7 +129,7 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
                 }
             });
             if (!question) {
-                question = yield client_2.default.question.findFirst({
+                question = yield client_1.default.question.findFirst({
                     where: {
                         type: 'COMMON',
                         NOT: {
@@ -130,12 +148,19 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
         }
     }
     if (question) {
-        yield client_2.default.team.update({
+        // Update the team's current question ID
+        yield client_1.default.team.update({
             where: { id: teamId },
             data: { currentQuestionId: question.id }
         });
+        // Destructure the question to remove the correctAnswer field
+        const { correctAnswer } = question, filteredQuestion = __rest(question, ["correctAnswer"]);
+        // Return the filtered question without correctAnswer
+        return res.json(filteredQuestion);
     }
-    return res.json(question);
+    else {
+        return res.status(404).json({ error: 'No more questions' });
+    }
 });
 exports.getNextQuestion = getNextQuestion;
 const BUFF_DURATIONS = {
@@ -147,7 +172,7 @@ const BUFF_DURATIONS = {
 const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { type, targetTeamId, sourceTeamId } = req.body;
     // Validate source team and available buffs
-    const sourceTeam = yield client_2.default.team.findUnique({
+    const sourceTeam = yield client_1.default.team.findUnique({
         where: { id: sourceTeamId },
         select: { availableBuffs: true, currentPhase: true }
     });
@@ -165,7 +190,7 @@ const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function
             case 'LOCK_ONE_TEAM':
                 expiresAt = yield (0, buffDebuffs_1.lockTeam)(targetTeamId, BUFF_DURATIONS.LOCK_ONE_TEAM);
                 wss.clients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
+                    if (client.readyState === ws_1.WebSocket.OPEN) {
                         client.send(JSON.stringify({ event: 'team-locked', data: { teamId: targetTeamId, expiresAt } }));
                     }
                 });
@@ -173,7 +198,7 @@ const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function
             case 'LOCK_ALL_EXCEPT_ONE':
                 expiresAt = yield (0, buffDebuffs_1.lockAllTeamsExcept)(targetTeamId, BUFF_DURATIONS.LOCK_ALL_EXCEPT_ONE);
                 wss.clients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
+                    if (client.readyState === ws_1.WebSocket.OPEN) {
                         client.send(JSON.stringify({ event: 'teams-locked-except-one', data: { teamId: targetTeamId, expiresAt } }));
                     }
                 });
@@ -185,8 +210,8 @@ const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function
                 yield (0, buffDebuffs_1.skipCurrentQuestion)(targetTeamId);
                 break;
         }
-        yield client_2.default.$transaction([
-            client_2.default.buffDebuff.create({
+        yield client_1.default.$transaction([
+            client_1.default.buffDebuff.create({
                 data: {
                     type,
                     appliedById: sourceTeamId,
@@ -196,14 +221,14 @@ const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function
                     isUsed: true
                 }
             }),
-            client_2.default.team.update({
+            client_1.default.team.update({
                 where: { id: sourceTeamId },
                 data: {
                     availableBuffs: availableBuffs.filter(b => b !== type)
                 }
             })
         ]);
-        (0, socketService_1.emitTeamsList)((0, socketInstance_1.getSocket)(), client_2.default);
+        (0, socketService_1.emitTeamsList)((0, socketInstance_1.getSocket)(), client_1.default);
         return res.json({ success: true, expiresAt });
     }
     catch (error) {
@@ -215,7 +240,7 @@ exports.applyBuffDebuff = applyBuffDebuff;
 const broadcastMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { message, senderId, type, priority } = req.body;
     const wss = (0, socketInstance_1.getSocket)();
-    const broadcast = yield client_2.default.broadcast.create({
+    const broadcast = yield client_1.default.broadcast.create({
         data: {
             message,
             senderId,
@@ -225,7 +250,7 @@ const broadcastMessage = (req, res) => __awaiter(void 0, void 0, void 0, functio
         }
     });
     wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
+        if (client.readyState === ws_1.WebSocket.OPEN) {
             client.send(JSON.stringify({ event: 'broadcast', data: broadcast }));
         }
     });
@@ -234,7 +259,7 @@ const broadcastMessage = (req, res) => __awaiter(void 0, void 0, void 0, functio
 exports.broadcastMessage = broadcastMessage;
 const getGameStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const [teams, zones, currentPhase] = yield Promise.all([
-        client_2.default.team.findMany({
+        client_1.default.team.findMany({
             where: {
                 socketId: {
                     not: null
@@ -249,12 +274,12 @@ const getGameStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* 
                 capturedZones: { select: { id: true, name: true } }
             }
         }),
-        client_2.default.zone.findMany({
+        client_1.default.zone.findMany({
             include: {
                 capturedBy: { select: { teamName: true } }
             }
         }),
-        client_2.default.phase.findFirst({
+        client_1.default.phase.findFirst({
             where: { isActive: true }
         })
     ]);
@@ -269,7 +294,7 @@ exports.getGameStatus = getGameStatus;
 const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { teamId, answer, zoneId } = req.body;
     const wss = (0, socketInstance_1.getSocket)();
-    const team = yield client_2.default.team.findUnique({
+    const team = yield client_1.default.team.findUnique({
         where: { id: teamId },
         include: {
             currentQuestion: {
@@ -290,14 +315,14 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
         let points = question.points || 10;
         let transactions = [];
         // Base transaction for answering question
-        transactions.push(client_2.default.team.update({
+        transactions.push(client_1.default.team.update({
             where: { id: teamId },
             data: {
                 score: { increment: points },
                 answeredQuestions: { connect: { id: question.id } },
                 currentQuestionId: null
             }
-        }), client_2.default.questionProgress.create({
+        }), client_1.default.questionProgress.create({
             data: {
                 teamId,
                 questionId: question.id,
@@ -308,14 +333,14 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
         switch (team.currentPhase) {
             case 'PHASE_1': {
                 if (question.type === 'ZONE_SPECIFIC' && zoneId) {
-                    const zoneQuestions = yield client_2.default.$transaction([
-                        client_2.default.question.count({
+                    const zoneQuestions = yield client_1.default.$transaction([
+                        client_1.default.question.count({
                             where: {
                                 zoneId,
                                 type: 'ZONE_SPECIFIC'
                             }
                         }),
-                        client_2.default.question.count({
+                        client_1.default.question.count({
                             where: {
                                 zoneId,
                                 type: 'ZONE_SPECIFIC',
@@ -326,7 +351,7 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
                     const [total, answered] = zoneQuestions;
                     if (answered + 1 >= total) {
                         // All zone questions completed, capture zone
-                        transactions.push(client_2.default.zone.update({
+                        transactions.push(client_1.default.zone.update({
                             where: { id: zoneId },
                             data: {
                                 capturedById: teamId,
@@ -335,7 +360,7 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
                         }));
                         // Generate buff for zone capture
                         const buff = (0, buffDebuffs_1.generateRandomBuffDebuff)();
-                        transactions.push(client_2.default.team.update({
+                        transactions.push(client_1.default.team.update({
                             where: { id: teamId },
                             data: {
                                 availableBuffs: {
@@ -349,10 +374,10 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
             }
             case 'PHASE_2': {
                 if (question.type === 'ZONE_CAPTURE' && zoneId) {
-                    transactions.push(client_2.default.zone.updateMany({
+                    transactions.push(client_1.default.zone.updateMany({
                         where: { capturedById: teamId },
                         data: { capturedById: null }
-                    }), client_2.default.zone.update({
+                    }), client_1.default.zone.update({
                         where: { id: zoneId },
                         data: { capturedById: teamId }
                     }));
@@ -362,7 +387,7 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
             case 'PHASE_3': {
                 if (team.extraQuestions.some(q => q.id === question.id)) {
                     points = Math.floor(points * 1.5); // 50% bonus for extra questions
-                    transactions[0] = client_2.default.team.update({
+                    transactions[0] = client_1.default.team.update({
                         where: { id: teamId },
                         data: {
                             score: { increment: points },
@@ -378,15 +403,15 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
             }
         }
         try {
-            yield client_2.default.$transaction(transactions);
+            yield client_1.default.$transaction(transactions);
             if (zoneId) {
                 wss.clients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
+                    if (client.readyState === ws_1.WebSocket.OPEN) {
                         client.send(JSON.stringify({ event: 'zone-update', data: { zoneId, teamId, phase: team.currentPhase } }));
                     }
                 });
             }
-            (0, socketService_1.emitLeaderboard)(wss, client_2.default);
+            (0, socketService_1.emitLeaderboard)(wss, client_1.default);
             return res.json({
                 success: true,
                 points,
@@ -399,7 +424,7 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
         }
     }
     // Handle incorrect answer
-    yield client_2.default.questionProgress.upsert({
+    yield client_1.default.questionProgress.upsert({
         where: {
             teamId_questionId: {
                 teamId,
@@ -417,19 +442,33 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
 });
 exports.answerQuestion = answerQuestion;
 const addPhaseQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { phase, questionData } = req.body;
     try {
-        const { phase, questionData } = req.body;
-        if (!Object.values(client_1.GamePhase).includes(phase)) {
-            return res.status(400).json({ error: "Invalid phase" });
+        // Validate phase-specific requirements
+        switch (phase) {
+            case 'PHASE_1':
+                if (!questionData.zoneId) {
+                    return res.status(400).json({ error: "Zone ID required for Phase 1 questions" });
+                }
+                questionData.type = 'ZONE_SPECIFIC';
+                break;
+            case 'PHASE_2':
+                questionData.type = 'ZONE_CAPTURE';
+                break;
+            case 'PHASE_3':
+                questionData.type = 'COMMON';
+                delete questionData.zoneId; // No zones in Phase 3
+                break;
+            default:
+                return res.status(400).json({ error: "Invalid phase" });
         }
-        // Ensure the phase exists or create it if it doesn't
-        const phaseRecord = yield client_2.default.phase.upsert({
+        const phaseRecord = yield client_1.default.phase.upsert({
             where: { phase },
-            create: { phase, isActive: false }, // Default to inactive when created
-            update: {}, // Do nothing if the phase already exists
+            create: { phase, isActive: false },
+            update: {}
         });
-        const question = yield client_2.default.question.create({
-            data: Object.assign(Object.assign({}, questionData), { type: buffDebuffs_1.QUESTION_TYPES[phase], phaseId: phaseRecord.id, points: questionData.points || 10, images: questionData.images || [] }),
+        const question = yield client_1.default.question.create({
+            data: Object.assign(Object.assign({}, questionData), { phaseId: phaseRecord.id })
         });
         return res.json({ success: true, question });
     }
@@ -445,7 +484,7 @@ const adminLockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function* 
     try {
         const expiresAt = yield (0, buffDebuffs_1.lockTeam)(teamId, duration);
         wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
+            if (client.readyState === ws_1.WebSocket.OPEN) {
                 client.send(JSON.stringify({ event: 'team-locked', data: { teamId, expiresAt } }));
             }
         });
@@ -463,7 +502,7 @@ const adminUnlockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function
     try {
         yield (0, buffDebuffs_1.unlockTeam)(teamId);
         wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
+            if (client.readyState === ws_1.WebSocket.OPEN) {
                 client.send(JSON.stringify({ event: 'team-unlocked', data: { teamId } }));
             }
         });
@@ -481,14 +520,14 @@ const adminLockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, functi
     expiresAt.setMinutes(expiresAt.getMinutes() + duration);
     const wss = (0, socketInstance_1.getSocket)();
     try {
-        yield client_2.default.team.updateMany({
+        yield client_1.default.team.updateMany({
             data: {
                 isLocked: true,
                 lockedUntil: expiresAt
             }
         });
         wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
+            if (client.readyState === ws_1.WebSocket.OPEN) {
                 client.send(JSON.stringify({ event: 'teams-locked', data: { expiresAt } }));
             }
         });
@@ -505,7 +544,7 @@ const adminUnlockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, func
     try {
         yield (0, buffDebuffs_1.unlockAllTeams)();
         wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
+            if (client.readyState === ws_1.WebSocket.OPEN) {
                 client.send(JSON.stringify({ event: 'teams-unlocked' }));
             }
         });
@@ -519,7 +558,7 @@ const adminUnlockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, func
 exports.adminUnlockAllTeams = adminUnlockAllTeams;
 const getLeaderboard = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const leaderboard = yield client_2.default.team.findMany({
+        const leaderboard = yield client_1.default.team.findMany({
             select: {
                 id: true,
                 teamName: true,
@@ -544,17 +583,17 @@ exports.getLeaderboard = getLeaderboard;
 const changePhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { phase } = req.body;
     const wss = (0, socketInstance_1.getSocket)();
-    yield client_2.default.phase.updateMany({
+    yield client_1.default.phase.updateMany({
         data: { isActive: false },
     });
-    const updatedPhase = yield client_2.default.phase.update({
+    const updatedPhase = yield client_1.default.phase.update({
         where: { phase },
         data: {
             isActive: true,
             startTime: new Date(),
         },
     });
-    yield client_2.default.team.updateMany({
+    yield client_1.default.team.updateMany({
         data: { currentPhase: phase },
     });
     const phaseData = {
@@ -563,10 +602,57 @@ const changePhase = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
         message: `Phase changed to ${phase}`
     };
     wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
+        if (client.readyState === ws_1.WebSocket.OPEN) {
             client.send(JSON.stringify({ event: 'phase-change', data: phaseData }));
         }
     });
     return res.json({ success: true, data: phaseData });
 });
 exports.changePhase = changePhase;
+const createZone = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const zoneData = req.body;
+    try {
+        const zone = yield client_1.default.zone.create({
+            data: Object.assign(Object.assign({}, zoneData), { phase1Complete: false })
+        });
+        return res.json({ success: true, zone });
+    }
+    catch (error) {
+        console.error('Error creating zone:', error);
+        return res.status(500).json({ error: 'Failed to create zone' });
+    }
+});
+exports.createZone = createZone;
+const updateZone = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const _a = req.body, { id } = _a, zoneData = __rest(_a, ["id"]);
+    try {
+        const zone = yield client_1.default.zone.update({
+            where: { id },
+            data: zoneData
+        });
+        return res.json({ success: true, zone });
+    }
+    catch (error) {
+        console.error('Error updating zone:', error);
+        return res.status(500).json({ error: 'Failed to update zone' });
+    }
+});
+exports.updateZone = updateZone;
+const createPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { phase, isActive = false } = req.body;
+    try {
+        const phaseRecord = yield client_1.default.phase.create({
+            data: {
+                phase,
+                isActive,
+                startTime: isActive ? new Date() : null
+            }
+        });
+        return res.json({ success: true, phase: phaseRecord });
+    }
+    catch (error) {
+        console.error('Error creating phase:', error);
+        return res.status(500).json({ error: 'Failed to create phase' });
+    }
+});
+exports.createPhase = createPhase;
