@@ -35,54 +35,65 @@ export const generateRandomBuffDebuff = (): BuffDebuffType => {
 
 // Question Management
 export const assignExtraQuestion = async (teamId: string) => {
-    const team = await prisma.team.findUnique({
-        where: { id: teamId },
-        include: {
-            answeredQuestions: true,
-            extraQuestions: true,
-            skippedQuestions: true
-        }
-    });
-
-    if (!team) throw new Error('Team not found');
-
-    // Get a new question based on team's current phase
-    const extraQuestion = await prisma.question.findFirst({
-        where: {
-            type: QUESTION_TYPES[team.currentPhase],
-            isUsed: false,  // Only get unused questions
-            NOT: {
-                id: {
-                    in: [
-                        ...team.answeredQuestions.map(q => q.id),
-                        ...team.extraQuestions.map(q => q.id),
-                        ...team.skippedQuestions.map(q => q.id)
-                    ]
-                }
-            }
-        },
-        orderBy: { order: 'asc' }
-    });
-
-    if (!extraQuestion) throw new Error('No available questions for extra question buff');
-
-    // Transaction ensures both operations happen together
-    await prisma.$transaction([
-        prisma.team.update({
+    try {
+        const team = await prisma.team.findUnique({
             where: { id: teamId },
-            data: {
-                extraQuestions: {
-                    connect: { id: extraQuestion.id }
-                }
+            include: {
+                answeredQuestions: true,
+                extraQuestions: true,
+                skippedQuestions: true
             }
-        }),
-        prisma.question.update({
-            where: { id: extraQuestion.id },
-            data: { isUsed: true }
-        })
-    ]);
+        });
 
-    return extraQuestion;
+        if (!team) {
+            console.error(`Team not found with ID: ${teamId}`);
+            throw new Error('Team not found');
+        }
+
+        const allowedTypes = [QuestionType.ZONE_CAPTURE, QuestionType.COMMON];
+        const extraQuestion = await prisma.question.findFirst({
+            where: {
+                type: { in: allowedTypes },
+                isUsed: false,
+                NOT: {
+                    id: {
+                        in: [
+                            ...team.answeredQuestions.map(q => q.id),
+                            ...team.extraQuestions.map(q => q.id),
+                            ...team.skippedQuestions.map(q => q.id)
+                        ]
+                    }
+                }
+            },
+            orderBy: { order: 'asc' }
+        });
+
+        if (!extraQuestion) {
+            console.error(`No available questions for team: ${teamId}`);
+            throw new Error('No available questions for extra question buff');
+        }
+
+        await prisma.$transaction([
+            prisma.team.update({
+                where: { id: teamId },
+                data: {
+                    extraQuestions: {
+                        connect: { id: extraQuestion.id }
+                    }
+                }
+            }),
+            prisma.question.update({
+                where: { id: extraQuestion.id },
+                data: { isUsed: true }
+            })
+        ]);
+
+        console.log(`Successfully assigned extra question ${extraQuestion.id} to team ${teamId}`);
+        return extraQuestion;
+    } catch (error) {
+        console.error('Error in assignExtraQuestion:', error);
+        throw error;
+    }
 };
 
 export const skipCurrentQuestion = async (teamId: string): Promise<void> => {
