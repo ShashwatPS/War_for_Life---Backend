@@ -112,7 +112,7 @@ model Phase {
 model Question {
   id                   String             @id @default(cuid())
   content              String
-  images               Json
+  images               String[]
   correctAnswer        String
   type                 QuestionType
   zoneId               String?

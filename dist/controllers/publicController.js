@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
+exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
 const client_1 = require("@prisma/client");
 const socketInstance_1 = require("../services/socketInstance");
 const client_2 = __importDefault(require("../db/client"));
@@ -159,13 +159,24 @@ const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function
         return res.status(400).json({ error: 'Buff not available' });
     }
     let expiresAt = new Date();
+    const wss = (0, socketInstance_1.getSocket)();
     try {
         switch (type) {
             case 'LOCK_ONE_TEAM':
                 expiresAt = yield (0, buffDebuffs_1.lockTeam)(targetTeamId, BUFF_DURATIONS.LOCK_ONE_TEAM);
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({ event: 'team-locked', data: { teamId: targetTeamId, expiresAt } }));
+                    }
+                });
                 break;
             case 'LOCK_ALL_EXCEPT_ONE':
                 expiresAt = yield (0, buffDebuffs_1.lockAllTeamsExcept)(targetTeamId, BUFF_DURATIONS.LOCK_ALL_EXCEPT_ONE);
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({ event: 'teams-locked-except-one', data: { teamId: targetTeamId, expiresAt } }));
+                    }
+                });
                 break;
             case 'EXTRA_QUESTION':
                 yield (0, buffDebuffs_1.assignExtraQuestion)(targetTeamId);
@@ -411,15 +422,14 @@ const addPhaseQuestion = (req, res) => __awaiter(void 0, void 0, void 0, functio
         if (!Object.values(client_1.GamePhase).includes(phase)) {
             return res.status(400).json({ error: "Invalid phase" });
         }
-        // Get the phase record first
-        const phaseRecord = yield client_2.default.phase.findUnique({
-            where: { phase }
+        // Ensure the phase exists or create it if it doesn't
+        const phaseRecord = yield client_2.default.phase.upsert({
+            where: { phase },
+            create: { phase, isActive: false }, // Default to inactive when created
+            update: {}, // Do nothing if the phase already exists
         });
-        if (!phaseRecord) {
-            return res.status(404).json({ error: "Phase not found" });
-        }
         const question = yield client_2.default.question.create({
-            data: Object.assign(Object.assign({}, questionData), { type: buffDebuffs_1.QUESTION_TYPES[phase], phaseId: phaseRecord.id, points: questionData.points || 10, images: questionData.images || [] })
+            data: Object.assign(Object.assign({}, questionData), { type: buffDebuffs_1.QUESTION_TYPES[phase], phaseId: phaseRecord.id, points: questionData.points || 10, images: questionData.images || [] }),
         });
         return res.json({ success: true, question });
     }
@@ -431,8 +441,14 @@ const addPhaseQuestion = (req, res) => __awaiter(void 0, void 0, void 0, functio
 exports.addPhaseQuestion = addPhaseQuestion;
 const adminLockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { teamId, duration = 1 } = req.body;
+    const wss = (0, socketInstance_1.getSocket)();
     try {
         const expiresAt = yield (0, buffDebuffs_1.lockTeam)(teamId, duration);
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'team-locked', data: { teamId, expiresAt } }));
+            }
+        });
         return res.json({ success: true, teamId, expiresAt });
     }
     catch (error) {
@@ -443,8 +459,14 @@ const adminLockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function* 
 exports.adminLockTeam = adminLockTeam;
 const adminUnlockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { teamId } = req.body;
+    const wss = (0, socketInstance_1.getSocket)();
     try {
         yield (0, buffDebuffs_1.unlockTeam)(teamId);
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'team-unlocked', data: { teamId } }));
+            }
+        });
         return res.json({ success: true, teamId });
     }
     catch (error) {
@@ -457,6 +479,7 @@ const adminLockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, functi
     const { duration = 1 } = req.body;
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + duration);
+    const wss = (0, socketInstance_1.getSocket)();
     try {
         yield client_2.default.team.updateMany({
             data: {
@@ -464,8 +487,11 @@ const adminLockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 lockedUntil: expiresAt
             }
         });
-        const io = (0, socketInstance_1.getSocket)();
-        io.emit('teams-locked', { expiresAt });
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'teams-locked', data: { expiresAt } }));
+            }
+        });
         return res.json({ success: true, expiresAt });
     }
     catch (error) {
@@ -475,8 +501,14 @@ const adminLockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, functi
 });
 exports.adminLockAllTeams = adminLockAllTeams;
 const adminUnlockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const wss = (0, socketInstance_1.getSocket)();
     try {
         yield (0, buffDebuffs_1.unlockAllTeams)();
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'teams-unlocked' }));
+            }
+        });
         return res.json({ success: true });
     }
     catch (error) {
@@ -509,3 +541,32 @@ const getLeaderboard = (req, res) => __awaiter(void 0, void 0, void 0, function*
     }
 });
 exports.getLeaderboard = getLeaderboard;
+const changePhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { phase } = req.body;
+    const wss = (0, socketInstance_1.getSocket)();
+    yield client_2.default.phase.updateMany({
+        data: { isActive: false },
+    });
+    const updatedPhase = yield client_2.default.phase.update({
+        where: { phase },
+        data: {
+            isActive: true,
+            startTime: new Date(),
+        },
+    });
+    yield client_2.default.team.updateMany({
+        data: { currentPhase: phase },
+    });
+    const phaseData = {
+        phase,
+        startTime: updatedPhase.startTime,
+        message: `Phase changed to ${phase}`
+    };
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ event: 'phase-change', data: phaseData }));
+        }
+    });
+    return res.json({ success: true, data: phaseData });
+});
+exports.changePhase = changePhase;

@@ -1,5 +1,5 @@
 import { Request, Response, RequestHandler } from "express";
-import { BuffDebuffType, GamePhase } from "@prisma/client";
+import { BuffDebuffType, GamePhase, QuestionType } from "@prisma/client";
 import { getSocket } from "../services/socketInstance";
 import pclient from "../db/client";
 import { emitLeaderboard, emitTeamsList } from "../services/socketService";
@@ -14,6 +14,26 @@ import {
     getBuff,
     QUESTION_TYPES
 } from "../helpers/buffDebuffs";
+import { WebSocket } from 'ws';
+
+// New interfaces
+interface ZoneData {
+    name: string;
+    description?: string;
+    order: number;
+}
+
+// Update QuestionData interface
+interface QuestionData {
+    content: string;
+    correctAnswer: string;
+    points: number;
+    order: number;
+    zoneId?: string;
+    type: QuestionType;
+    images: string[];
+    difficulty?: string;
+}
 
 export const startPhase: RequestHandler = async (req, res): Promise<any> => {
     const { phase }: { phase: GamePhase } = req.body;
@@ -66,6 +86,15 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
         case 'PHASE_1': {
             if (!zoneId) {
                 return res.status(400).json({ error: 'Zone ID required for Phase 1 questions' });
+            }
+
+            // Check if zone is already completed by another team
+            const zone = await pclient.zone.findUnique({
+                where: { id: zoneId }
+            });
+
+            if (zone?.phase1Complete && zone.capturedById !== teamId) {
+                return res.status(400).json({ error: 'Zone is already captured' });
             }
 
             // Get questions specific to the requested zone that team hasn't answered yet
@@ -184,15 +213,26 @@ export const applyBuffDebuff: RequestHandler = async (req, res): Promise<any> =>
     }
 
     let expiresAt = new Date();
+    const wss = getSocket();
     
     try {
         switch (type) {
             case 'LOCK_ONE_TEAM':
                 expiresAt = await lockTeam(targetTeamId, BUFF_DURATIONS.LOCK_ONE_TEAM);
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({ event: 'team-locked', data: { teamId: targetTeamId, expiresAt } }));
+                    }
+                });
                 break;
 
             case 'LOCK_ALL_EXCEPT_ONE':
                 expiresAt = await lockAllTeamsExcept(targetTeamId, BUFF_DURATIONS.LOCK_ALL_EXCEPT_ONE);
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({ event: 'teams-locked-except-one', data: { teamId: targetTeamId, expiresAt } }));
+                    }
+                });
                 break;
 
             case 'EXTRA_QUESTION':
@@ -476,32 +516,41 @@ interface PhaseQuestionData {
 }
 
 export const addPhaseQuestion: RequestHandler = async (req, res): Promise<any> => {
+    const { phase, questionData } = req.body as {
+        phase: GamePhase;
+        questionData: QuestionData;
+    };
+
     try {
-        const { phase, questionData } = req.body as {
-            phase: GamePhase;
-            questionData: PhaseQuestionData;
-        };
-
-        if (!Object.values(GamePhase).includes(phase)) {
-            return res.status(400).json({ error: "Invalid phase" });
+        // Validate phase-specific requirements
+        switch (phase) {
+            case 'PHASE_1':
+                if (!questionData.zoneId) {
+                    return res.status(400).json({ error: "Zone ID required for Phase 1 questions" });
+                }
+                questionData.type = 'ZONE_SPECIFIC';
+                break;
+            case 'PHASE_2':
+                questionData.type = 'ZONE_CAPTURE';
+                break;
+            case 'PHASE_3':
+                questionData.type = 'COMMON';
+                delete questionData.zoneId; // No zones in Phase 3
+                break;
+            default:
+                return res.status(400).json({ error: "Invalid phase" });
         }
 
-        // Get the phase record first
-        const phaseRecord = await pclient.phase.findUnique({
-            where: { phase }
+        const phaseRecord = await pclient.phase.upsert({
+            where: { phase },
+            create: { phase, isActive: false },
+            update: {}
         });
-
-        if (!phaseRecord) {
-            return res.status(404).json({ error: "Phase not found" });
-        }
 
         const question = await pclient.question.create({
             data: {
                 ...questionData,
-                type: QUESTION_TYPES[phase],
                 phaseId: phaseRecord.id,
-                points: questionData.points || 10,
-                images: questionData.images || []
             }
         });
 
@@ -514,9 +563,15 @@ export const addPhaseQuestion: RequestHandler = async (req, res): Promise<any> =
 
 export const adminLockTeam: RequestHandler = async (req, res): Promise<any> => {
     const { teamId, duration = 1 } = req.body;
+    const wss = getSocket();
     
     try {
         const expiresAt = await lockTeam(teamId, duration);
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'team-locked', data: { teamId, expiresAt } }));
+            }
+        });
         return res.json({ success: true, teamId, expiresAt });
     } catch (error) {
         console.error('Error locking team:', error);
@@ -526,9 +581,15 @@ export const adminLockTeam: RequestHandler = async (req, res): Promise<any> => {
 
 export const adminUnlockTeam: RequestHandler = async (req, res): Promise<any> => {
     const { teamId } = req.body;
+    const wss = getSocket();
     
     try {
         await unlockTeam(teamId);
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'team-unlocked', data: { teamId } }));
+            }
+        });
         return res.json({ success: true, teamId });
     } catch (error) {
         console.error('Error unlocking team:', error);
@@ -540,6 +601,7 @@ export const adminLockAllTeams: RequestHandler = async (req, res): Promise<any> 
     const { duration = 1 } = req.body;
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + duration);
+    const wss = getSocket();
     
     try {
         await pclient.team.updateMany({
@@ -548,8 +610,11 @@ export const adminLockAllTeams: RequestHandler = async (req, res): Promise<any> 
                 lockedUntil: expiresAt
             }
         });
-        const io = getSocket();
-        io.emit('teams-locked', { expiresAt });
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'teams-locked', data: { expiresAt } }));
+            }
+        });
         return res.json({ success: true, expiresAt });
     } catch (error) {
         console.error('Error locking all teams:', error);
@@ -558,8 +623,15 @@ export const adminLockAllTeams: RequestHandler = async (req, res): Promise<any> 
 };
 
 export const adminUnlockAllTeams: RequestHandler = async (req, res): Promise<any> => {
+    const wss = getSocket();
+    
     try {
         await unlockAllTeams();
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'teams-unlocked' }));
+            }
+        });
         return res.json({ success: true });
     } catch (error) {
         console.error('Error unlocking all teams:', error);
@@ -589,3 +661,88 @@ export const getLeaderboard: RequestHandler = async (req, res): Promise<any> => 
         return res.status(500).json({ error: 'Failed to get leaderboard' });
     }
 }
+
+export const changePhase: RequestHandler = async (req, res): Promise<any> => {
+    const { phase }: { phase: GamePhase } = req.body;
+    const wss = getSocket();
+
+    await pclient.phase.updateMany({
+        data: { isActive: false },
+    });
+
+    const updatedPhase = await pclient.phase.update({
+        where: { phase },
+        data: {
+            isActive: true,
+            startTime: new Date(),
+        },
+    });
+
+    await pclient.team.updateMany({
+        data: { currentPhase: phase },
+    });
+
+    const phaseData = {
+        phase,
+        startTime: updatedPhase.startTime,
+        message: `Phase changed to ${phase}`
+    };
+
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ event: 'phase-change', data: phaseData }));
+        }
+    });
+
+    return res.json({ success: true, data: phaseData });
+};
+
+export const createZone: RequestHandler = async (req, res): Promise<any> => {
+    const zoneData: ZoneData = req.body;
+    
+    try {
+        const zone = await pclient.zone.create({
+            data: {
+                ...zoneData,
+                phase1Complete: false
+            }
+        });
+        return res.json({ success: true, zone });
+    } catch (error) {
+        console.error('Error creating zone:', error);
+        return res.status(500).json({ error: 'Failed to create zone' });
+    }
+};
+
+export const updateZone: RequestHandler = async (req, res): Promise<any> => {
+    const { id, ...zoneData }: ZoneData & { id: string } = req.body;
+    
+    try {
+        const zone = await pclient.zone.update({
+            where: { id },
+            data: zoneData
+        });
+        return res.json({ success: true, zone });
+    } catch (error) {
+        console.error('Error updating zone:', error);
+        return res.status(500).json({ error: 'Failed to update zone' });
+    }
+};
+
+export const createPhase: RequestHandler = async (req, res): Promise<any> => {
+    const { phase, isActive = false }: { phase: GamePhase; isActive: boolean } = req.body;
+    
+    try {
+        const phaseRecord = await pclient.phase.create({
+            data: {
+                phase,
+                isActive,
+                startTime: isActive ? new Date() : null
+            }
+        });
+        return res.json({ success: true, phase: phaseRecord });
+    } catch (error) {
+        console.error('Error creating phase:', error);
+        return res.status(500).json({ error: 'Failed to create phase' });
+    }
+};
