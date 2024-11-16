@@ -16,8 +16,8 @@ const socketService = (wss: WebSocketServer, prisma: PrismaClient) => {
                         data: { socketId: (ws as any)._socket.remoteAddress },
                     });
                     console.log(`Team ${teamId} connected`);
-                    emitTeamsList(wss, prisma);
-                    emitLeaderboard(wss, prisma);
+                    await emitTeamsList(wss, prisma);
+                    await emitLeaderboard(wss, prisma);
                 } catch (err) {
                     console.error('Error in team-connect:', err);
                 }
@@ -31,6 +31,7 @@ const socketService = (wss: WebSocketServer, prisma: PrismaClient) => {
                     data: { socketId: null },
                 });
                 console.log('Socket disconnected');
+                await emitTeamsList(wss, prisma);
             } catch (err) {
                 console.error('Error in disconnect:', err);
             }

@@ -89,8 +89,8 @@ const lockTeam = (teamId, duration) => __awaiter(void 0, void 0, void 0, functio
             lockedUntil: expiresAt
         }
     });
-    const io = (0, socketInstance_1.getSocket)();
-    (0, socketService_1.emitTeamsList)(io, prisma);
+    const wss = (0, socketInstance_1.getSocket)();
+    (0, socketService_1.emitTeamsList)(wss, prisma);
     return expiresAt;
 });
 exports.lockTeam = lockTeam;
@@ -102,8 +102,8 @@ const unlockTeam = (teamId) => __awaiter(void 0, void 0, void 0, function* () {
             lockedUntil: null
         }
     });
-    const io = (0, socketInstance_1.getSocket)();
-    (0, socketService_1.emitTeamsList)(io, prisma);
+    const wss = (0, socketInstance_1.getSocket)();
+    (0, socketService_1.emitTeamsList)(wss, prisma);
 });
 exports.unlockTeam = unlockTeam;
 const lockAllTeamsExcept = (exceptTeamId, duration) => __awaiter(void 0, void 0, void 0, function* () {
@@ -118,8 +118,8 @@ const lockAllTeamsExcept = (exceptTeamId, duration) => __awaiter(void 0, void 0,
             lockedUntil: expiresAt
         }
     });
-    const io = (0, socketInstance_1.getSocket)();
-    (0, socketService_1.emitTeamsList)(io, prisma);
+    const wss = (0, socketInstance_1.getSocket)();
+    (0, socketService_1.emitTeamsList)(wss, prisma);
     return expiresAt;
 });
 exports.lockAllTeamsExcept = lockAllTeamsExcept;
@@ -130,14 +130,14 @@ const unlockAllTeams = () => __awaiter(void 0, void 0, void 0, function* () {
             lockedUntil: null
         }
     });
-    const io = (0, socketInstance_1.getSocket)();
-    (0, socketService_1.emitTeamsList)(io, prisma);
+    const wss = (0, socketInstance_1.getSocket)();
+    (0, socketService_1.emitTeamsList)(wss, prisma);
 });
 exports.unlockAllTeams = unlockAllTeams;
-const startUnlockSystem = (io) => {
-    if (!io) {
-        console.error('Socket.io instance not provided to startUnlockSystem');
-        return setInterval(() => { }, 1000); // Return dummy interval in case of error
+const startUnlockSystem = (wss) => {
+    if (!wss) {
+        console.error('WebSocket server not provided to startUnlockSystem');
+        return setInterval(() => { }, 1000);
     }
     return setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
         try {
@@ -158,7 +158,7 @@ const startUnlockSystem = (io) => {
                         lockedUntil: null
                     }
                 });
-                (0, socketService_1.emitTeamsList)(io, prisma);
+                (0, socketService_1.emitTeamsList)(wss, prisma);
             }
         }
         catch (error) {

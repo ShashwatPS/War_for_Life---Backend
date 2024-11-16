@@ -44,26 +44,6 @@ export const startPhase: RequestHandler = async (req, res): Promise<any> => {
     return res.json({ success: true });
 };
 
-export const addQuestion: RequestHandler = async (req, res): Promise<any> => {
-    const { content, images, correctAnswer, type, zoneId, phaseId, order, points, difficulty } = req.body
-
-    const question = await pclient.question.create({
-        data: {
-            content,
-            images,
-            correctAnswer,
-            type,
-            zoneId,
-            phaseId,
-            order,
-            points,
-            difficulty
-        }
-    })
-
-    return res.json(question)
-}
-
 export const getNextQuestion: RequestHandler = async (req, res): Promise<any> => {
     const { teamId, zoneId } = req.params;
     
@@ -278,6 +258,11 @@ export const broadcastMessage: RequestHandler = async (req, res): Promise<any> =
 export const getGameStatus: RequestHandler = async (req, res): Promise<any> => {
     const [teams, zones, currentPhase] = await Promise.all([
         pclient.team.findMany({
+            where: {
+                socketId: {
+                    not: null
+                }
+            },
             select: {
                 id: true,
                 teamName: true,
@@ -581,3 +566,26 @@ export const adminUnlockAllTeams: RequestHandler = async (req, res): Promise<any
         return res.status(500).json({ error: 'Failed to unlock teams' });
     }
 };
+
+export const getLeaderboard: RequestHandler = async (req, res): Promise<any> => {
+    try {
+        const leaderboard = await pclient.team.findMany({
+            select: {
+                id: true,
+                teamName: true,
+                score: true,
+                capturedZones: {
+                    select: { id: true, name: true },
+                },
+            },
+            orderBy: [
+                { score: 'desc' },
+                { teamName: 'asc' },
+            ],
+        });
+        return res.json(leaderboard);
+    } catch (error) {
+        console.error('Error getting leaderboard:', error);
+        return res.status(500).json({ error: 'Failed to get leaderboard' });
+    }
+}

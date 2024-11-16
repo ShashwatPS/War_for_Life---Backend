@@ -17,7 +17,7 @@ const publicRoutes_1 = __importDefault(require("./routes/publicRoutes"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const server = (0, http_1.createServer)(app);
-const io = (0, socketInstance_1.initSocket)(server); // Initialize Socket.io
+const wss = (0, socketInstance_1.initSocket)(server); // Initialize WebSocket server
 app.use(express_1.default.json());
 app.use((0, cors_1.default)());
 // Routes and middleware
@@ -25,10 +25,10 @@ app.use('/auth', userRoute_1.default);
 app.use(authMiddleware_1.default);
 app.use('/public', publicRoutes_1.default);
 // Initialize socket service
-(0, socketService_1.default)(io, client_1.default);
-// Pass the io instance to startUnlockSystem
-(0, buffDebuffs_1.startUnlockSystem)(io);
-const PORT = process.env.PORT || 5000;
+(0, socketService_1.default)(wss, client_1.default);
+// Pass the wss instance to startUnlockSystem
+(0, buffDebuffs_1.startUnlockSystem)(wss);
+const PORT = process.env.PORT || 6000;
 // Start the server
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

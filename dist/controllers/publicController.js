@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.addQuestion = exports.startPhase = void 0;
+exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
 const client_1 = require("@prisma/client");
 const socketInstance_1 = require("../services/socketInstance");
 const client_2 = __importDefault(require("../db/client"));
@@ -20,7 +20,7 @@ const socketService_1 = require("../services/socketService");
 const buffDebuffs_1 = require("../helpers/buffDebuffs");
 const startPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { phase } = req.body;
-    const io = (0, socketInstance_1.getSocket)();
+    const wss = (0, socketInstance_1.getSocket)();
     yield client_2.default.phase.updateMany({
         data: { isActive: false },
     });
@@ -34,28 +34,14 @@ const startPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
     yield client_2.default.team.updateMany({
         data: { currentPhase: phase },
     });
-    io.emit("phase-change", { phase, startTime: updatedPhase.startTime });
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ event: 'phase-change', data: { phase, startTime: updatedPhase.startTime } }));
+        }
+    });
     return res.json({ success: true });
 });
 exports.startPhase = startPhase;
-const addQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { content, images, correctAnswer, type, zoneId, phaseId, order, points, difficulty } = req.body;
-    const question = yield client_2.default.question.create({
-        data: {
-            content,
-            images,
-            correctAnswer,
-            type,
-            zoneId,
-            phaseId,
-            order,
-            points,
-            difficulty
-        }
-    });
-    return res.json(question);
-});
-exports.addQuestion = addQuestion;
 const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { teamId, zoneId } = req.params;
     const team = yield client_2.default.team.findUnique({
@@ -217,7 +203,7 @@ const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function
 exports.applyBuffDebuff = applyBuffDebuff;
 const broadcastMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { message, senderId, type, priority } = req.body;
-    const io = (0, socketInstance_1.getSocket)();
+    const wss = (0, socketInstance_1.getSocket)();
     const broadcast = yield client_2.default.broadcast.create({
         data: {
             message,
@@ -227,13 +213,22 @@ const broadcastMessage = (req, res) => __awaiter(void 0, void 0, void 0, functio
             pastMessages: {}
         }
     });
-    io.emit('broadcast', broadcast);
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ event: 'broadcast', data: broadcast }));
+        }
+    });
     return res.json(broadcast);
 });
 exports.broadcastMessage = broadcastMessage;
 const getGameStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const [teams, zones, currentPhase] = yield Promise.all([
         client_2.default.team.findMany({
+            where: {
+                socketId: {
+                    not: null
+                }
+            },
             select: {
                 id: true,
                 teamName: true,
@@ -262,7 +257,7 @@ const getGameStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* 
 exports.getGameStatus = getGameStatus;
 const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { teamId, answer, zoneId } = req.body;
-    const io = (0, socketInstance_1.getSocket)();
+    const wss = (0, socketInstance_1.getSocket)();
     const team = yield client_2.default.team.findUnique({
         where: { id: teamId },
         include: {
@@ -374,13 +369,13 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
         try {
             yield client_2.default.$transaction(transactions);
             if (zoneId) {
-                io.emit('zone-update', {
-                    zoneId,
-                    teamId,
-                    phase: team.currentPhase
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({ event: 'zone-update', data: { zoneId, teamId, phase: team.currentPhase } }));
+                    }
                 });
             }
-            (0, socketService_1.emitLeaderboard)(io, client_2.default);
+            (0, socketService_1.emitLeaderboard)(wss, client_2.default);
             return res.json({
                 success: true,
                 points,
@@ -490,3 +485,27 @@ const adminUnlockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, func
     }
 });
 exports.adminUnlockAllTeams = adminUnlockAllTeams;
+const getLeaderboard = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const leaderboard = yield client_2.default.team.findMany({
+            select: {
+                id: true,
+                teamName: true,
+                score: true,
+                capturedZones: {
+                    select: { id: true, name: true },
+                },
+            },
+            orderBy: [
+                { score: 'desc' },
+                { teamName: 'asc' },
+            ],
+        });
+        return res.json(leaderboard);
+    }
+    catch (error) {
+        console.error('Error getting leaderboard:', error);
+        return res.status(500).json({ error: 'Failed to get leaderboard' });
+    }
+});
+exports.getLeaderboard = getLeaderboard;

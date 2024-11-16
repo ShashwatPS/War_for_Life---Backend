@@ -30,7 +30,7 @@ socketService(wss, pclient);
 // Pass the wss instance to startUnlockSystem
 startUnlockSystem(wss);
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 6000;
 
 // Start the server
 server.listen(PORT, () => {

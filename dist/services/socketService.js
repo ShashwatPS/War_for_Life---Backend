@@ -11,30 +11,36 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.emitLeaderboard = emitLeaderboard;
 exports.emitTeamsList = emitTeamsList;
-const socketService = (io, prisma) => {
-    io.on('connection', (socket) => {
-        console.log(`New connection: ${socket.id}`);
-        socket.on('team-connect', (_a) => __awaiter(void 0, [_a], void 0, function* ({ teamId }) {
-            try {
-                yield prisma.team.update({
-                    where: { id: teamId },
-                    data: { socketId: socket.id },
-                });
-                console.log(`Team ${teamId} connected with socket ${socket.id}`);
-                emitTeamsList(io, prisma);
-                emitLeaderboard(io, prisma);
-            }
-            catch (err) {
-                console.error('Error in team-connect:', err);
+const ws_1 = require("ws");
+const socketService = (wss, prisma) => {
+    wss.on('connection', (ws) => {
+        console.log('New connection');
+        ws.on('message', (message) => __awaiter(void 0, void 0, void 0, function* () {
+            const { event, data } = JSON.parse(message.toString());
+            if (event === 'team-connect') {
+                const { teamId } = data;
+                try {
+                    yield prisma.team.update({
+                        where: { id: teamId },
+                        data: { socketId: ws._socket.remoteAddress },
+                    });
+                    console.log(`Team ${teamId} connected`);
+                    yield emitTeamsList(wss, prisma);
+                    yield emitLeaderboard(wss, prisma);
+                }
+                catch (err) {
+                    console.error('Error in team-connect:', err);
+                }
             }
         }));
-        socket.on('disconnect', () => __awaiter(void 0, void 0, void 0, function* () {
+        ws.on('close', () => __awaiter(void 0, void 0, void 0, function* () {
             try {
                 yield prisma.team.updateMany({
-                    where: { socketId: socket.id },
+                    where: { socketId: ws._socket.remoteAddress },
                     data: { socketId: null },
                 });
-                console.log(`Socket ${socket.id} disconnected`);
+                console.log('Socket disconnected');
+                yield emitTeamsList(wss, prisma);
             }
             catch (err) {
                 console.error('Error in disconnect:', err);
@@ -42,7 +48,7 @@ const socketService = (io, prisma) => {
         }));
     });
 };
-function emitLeaderboard(io, prisma) {
+function emitLeaderboard(wss, prisma) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const leaderboard = yield prisma.team.findMany({
@@ -59,14 +65,18 @@ function emitLeaderboard(io, prisma) {
                     { teamName: 'asc' },
                 ],
             });
-            io.emit('leaderboard-update', leaderboard);
+            wss.clients.forEach(client => {
+                if (client.readyState === ws_1.WebSocket.OPEN) {
+                    client.send(JSON.stringify({ event: 'leaderboard-update', data: leaderboard }));
+                }
+            });
         }
         catch (err) {
             console.error('Error emitting leaderboard:', err);
         }
     });
 }
-function emitTeamsList(io, prisma) {
+function emitTeamsList(wss, prisma) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const teams = yield prisma.team.findMany({
@@ -78,7 +88,11 @@ function emitTeamsList(io, prisma) {
                     score: true,
                 },
             });
-            io.emit('teams-update', teams);
+            wss.clients.forEach(client => {
+                if (client.readyState === ws_1.WebSocket.OPEN) {
+                    client.send(JSON.stringify({ event: 'teams-update', data: teams }));
+                }
+            });
         }
         catch (err) {
             console.error('Error emitting teams list:', err);
