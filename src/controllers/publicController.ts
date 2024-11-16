@@ -149,6 +149,17 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
         }
         
         case 'PHASE_3': {
+            // Check if team has a zone from Phase 2 before providing questions
+            const hasZoneFromPhase2 = await pclient.zone.findFirst({
+                where: { capturedById: teamId }
+            });
+
+            if (!hasZoneFromPhase2) {
+                return res.status(403).json({ 
+                    error: 'Team must have captured a zone in Phase 2 to participate in Phase 3' 
+                });
+            }
+
             question = await pclient.question.findFirst({
                 where: {
                     id: {
@@ -437,14 +448,25 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
 
             case 'PHASE_2': {
                 if (question.type === 'ZONE_CAPTURE' && zoneId) {
+                    // First release any previously captured zones by this team
                     transactions.push(
                         pclient.zone.updateMany({
                             where: { capturedById: teamId },
-                            data: { capturedById: null }
-                        }),
+                            data: { 
+                                capturedById: null,
+                                phase1Complete: true  // Keep phase1Complete true
+                            }
+                        })
+                    );
+
+                    // Then capture the new zone
+                    transactions.push(
                         pclient.zone.update({
                             where: { id: zoneId },
-                            data: { capturedById: teamId }
+                            data: { 
+                                capturedById: teamId,
+                                phase1Complete: true  // Ensure phase1Complete is true
+                            }
                         })
                     );
                 }
@@ -452,6 +474,18 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
             }
 
             case 'PHASE_3': {
+                // Check if team has a zone from Phase 2 before allowing participation
+                const hasZoneFromPhase2 = await pclient.zone.findFirst({
+                    where: { capturedById: teamId }
+                });
+
+                if (!hasZoneFromPhase2) {
+                    return res.status(403).json({ 
+                        error: 'Team must have captured a zone in Phase 2 to participate in Phase 3' 
+                    });
+                }
+
+                // Rest of Phase 3 logic
                 if (team.extraQuestions.some(q => q.id === question.id)) {
                     points = Math.floor(points * 1.5); // 50% bonus for extra questions
                     transactions[0] = pclient.team.update({
