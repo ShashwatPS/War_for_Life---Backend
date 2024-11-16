@@ -23,7 +23,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
+exports.checkLock = exports.getAvailableBuffs = exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
 const socketInstance_1 = require("../services/socketInstance");
 const client_1 = __importDefault(require("../db/client"));
 const socketService_1 = require("../services/socketService");
@@ -54,13 +54,15 @@ const startPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
 });
 exports.startPhase = startPhase;
 const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { teamId, zoneId } = req.body;
+    const { zoneId } = req.body;
+    const teamId = req.user.userId;
     const team = yield client_1.default.team.findUnique({
         where: { id: teamId },
         include: {
             answeredQuestions: true,
             skippedQuestions: true,
-            extraQuestions: true
+            extraQuestions: true,
+            capturedZones: true // Add this to check captured zones
         }
     });
     if (!team) {
@@ -69,6 +71,12 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
     let question = null;
     switch (team.currentPhase) {
         case 'PHASE_1': {
+            // Add check for already captured zones
+            if (team.capturedZones.length > 0) {
+                return res.status(400).json({
+                    error: 'You have already captured a zone in Phase 1. Wait for Phase 2 to capture more zones.'
+                });
+            }
             if (!zoneId) {
                 return res.status(400).json({ error: 'Zone ID required for Phase 1 questions' });
             }
@@ -121,6 +129,7 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
             break;
         }
         case 'PHASE_3': {
+            // First check for extra questions
             question = yield client_1.default.question.findFirst({
                 where: {
                     id: {
@@ -128,6 +137,7 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
                     }
                 }
             });
+            // If no extra questions, get regular question
             if (!question) {
                 question = yield client_1.default.question.findFirst({
                     where: {
@@ -148,19 +158,12 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
         }
     }
     if (question) {
-        // Update the team's current question ID
         yield client_1.default.team.update({
             where: { id: teamId },
             data: { currentQuestionId: question.id }
         });
-        // Destructure the question to remove the correctAnswer field
-        const { correctAnswer } = question, filteredQuestion = __rest(question, ["correctAnswer"]);
-        // Return the filtered question without correctAnswer
-        return res.json(filteredQuestion);
     }
-    else {
-        return res.status(404).json({ error: 'No more questions' });
-    }
+    return res.json(question);
 });
 exports.getNextQuestion = getNextQuestion;
 const BUFF_DURATIONS = {
@@ -170,7 +173,8 @@ const BUFF_DURATIONS = {
     QUESTION_SKIP: 0
 };
 const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { type, targetTeamId, sourceTeamId } = req.body;
+    const { type, targetTeamId } = req.body;
+    const sourceTeamId = req.user.userId;
     // Validate source team and available buffs
     const sourceTeam = yield client_1.default.team.findUnique({
         where: { id: sourceTeamId },
@@ -178,6 +182,16 @@ const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function
     });
     if (!sourceTeam) {
         return res.status(404).json({ error: 'Source team not found' });
+    }
+    // Validate target team is online
+    const targetTeam = yield client_1.default.team.findUnique({
+        where: {
+            id: targetTeamId,
+            socketId: { not: null }
+        }
+    });
+    if (!targetTeam) {
+        return res.status(400).json({ error: 'Target team is not online' });
     }
     const availableBuffs = sourceTeam.availableBuffs;
     if (!availableBuffs.includes(type)) {
@@ -292,7 +306,8 @@ const getGameStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* 
 });
 exports.getGameStatus = getGameStatus;
 const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { teamId, answer, zoneId } = req.body;
+    const { answer, zoneId } = req.body;
+    const teamId = req.user.userId;
     const wss = (0, socketInstance_1.getSocket)();
     const team = yield client_1.default.team.findUnique({
         where: { id: teamId },
@@ -358,7 +373,6 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
                                 phase1Complete: true
                             }
                         }));
-                        // Generate buff for zone capture
                         const buff = (0, buffDebuffs_1.generateRandomBuffDebuff)();
                         transactions.push(client_1.default.team.update({
                             where: { id: teamId },
@@ -376,15 +390,31 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
                 if (question.type === 'ZONE_CAPTURE' && zoneId) {
                     transactions.push(client_1.default.zone.updateMany({
                         where: { capturedById: teamId },
-                        data: { capturedById: null }
-                    }), client_1.default.zone.update({
+                        data: {
+                            capturedById: null,
+                            phase1Complete: true
+                        }
+                    }));
+                    // Then capture the new zone
+                    transactions.push(client_1.default.zone.update({
                         where: { id: zoneId },
-                        data: { capturedById: teamId }
+                        data: {
+                            capturedById: teamId,
+                            phase1Complete: true
+                        }
                     }));
                 }
                 break;
             }
             case 'PHASE_3': {
+                const hasZoneFromPhase2 = yield client_1.default.zone.findFirst({
+                    where: { capturedById: teamId }
+                });
+                if (!hasZoneFromPhase2) {
+                    return res.status(403).json({
+                        error: 'Team must have captured a zone in Phase 2 to participate in Phase 3'
+                    });
+                }
                 if (team.extraQuestions.some(q => q.id === question.id)) {
                     points = Math.floor(points * 1.5); // 50% bonus for extra questions
                     transactions[0] = client_1.default.team.update({
@@ -423,7 +453,6 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
             return res.status(500).json({ error: 'Failed to process answer' });
         }
     }
-    // Handle incorrect answer
     yield client_1.default.questionProgress.upsert({
         where: {
             teamId_questionId: {
@@ -444,7 +473,6 @@ exports.answerQuestion = answerQuestion;
 const addPhaseQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { phase, questionData } = req.body;
     try {
-        // Validate phase-specific requirements
         switch (phase) {
             case 'PHASE_1':
                 if (!questionData.zoneId) {
@@ -479,7 +507,7 @@ const addPhaseQuestion = (req, res) => __awaiter(void 0, void 0, void 0, functio
 });
 exports.addPhaseQuestion = addPhaseQuestion;
 const adminLockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { teamId, duration = 1 } = req.body;
+    const { duration = 1, teamId } = req.body;
     const wss = (0, socketInstance_1.getSocket)();
     try {
         const expiresAt = yield (0, buffDebuffs_1.lockTeam)(teamId, duration);
@@ -656,3 +684,80 @@ const createPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
     }
 });
 exports.createPhase = createPhase;
+const getAvailableBuffs = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const teamId = req.user.userId;
+    try {
+        const sourceTeam = yield client_1.default.team.findUnique({
+            where: { id: teamId },
+            select: {
+                availableBuffs: true,
+                currentPhase: true
+            }
+        });
+        if (!sourceTeam) {
+            return res.status(404).json({ error: 'Team not found' });
+        }
+        const onlineTeams = yield client_1.default.team.findMany({
+            where: {
+                socketId: { not: null },
+                id: { not: teamId }
+            },
+            select: {
+                id: true,
+                teamName: true,
+                isLocked: true
+            }
+        });
+        const buffInfo = sourceTeam.availableBuffs.map(buff => ({
+            type: buff,
+            duration: BUFF_DURATIONS[buff],
+            description: getBuffDescription(buff)
+        }));
+        return res.json({
+            availableBuffs: buffInfo,
+            targetTeams: onlineTeams
+        });
+    }
+    catch (error) {
+        console.error('Error getting available buffs:', error);
+        return res.status(500).json({ error: 'Failed to get available buffs' });
+    }
+});
+exports.getAvailableBuffs = getAvailableBuffs;
+const checkLock = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const teamId = req.user.userId;
+        const team = yield client_1.default.team.findUnique({
+            where: { id: teamId },
+            select: { isLocked: true }
+        });
+        if (!team) {
+            return res.status(404).json({ error: 'Team not found' });
+        }
+        if (team.isLocked) {
+            return res.status(400).json({ error: 'Team is locked' });
+        }
+        else {
+            return res.status(200).json({ success: true });
+        }
+    }
+    catch (error) {
+        console.error('Error checking lock:', error);
+        return res.status(500).json({ error: 'Failed to check lock' });
+    }
+});
+exports.checkLock = checkLock;
+function getBuffDescription(type) {
+    switch (type) {
+        case 'LOCK_ONE_TEAM':
+            return `Lock a team for ${BUFF_DURATIONS.LOCK_ONE_TEAM} minute(s)`;
+        case 'LOCK_ALL_EXCEPT_ONE':
+            return `Lock all teams except one for ${BUFF_DURATIONS.LOCK_ALL_EXCEPT_ONE} minute(s)`;
+        case 'EXTRA_QUESTION':
+            return 'Give a team an extra question with 50% bonus points';
+        case 'QUESTION_SKIP':
+            return 'Force a team to skip their current question';
+        default:
+            return 'Unknown buff type';
+    }
+}

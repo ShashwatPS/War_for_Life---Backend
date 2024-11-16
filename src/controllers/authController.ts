@@ -91,7 +91,7 @@ export const login = async (req: Request, res: Response): Promise<any> => {
             expiresIn: process.env.JWT_EXPIRES_IN,
         });
 
-        res.json({ message: "Login successful", token });
+        res.json({ message: "Login successful", token, teamId: team.id });
     } catch (error) {
         res.status(500).json({ error: "Internal server error" });
     }

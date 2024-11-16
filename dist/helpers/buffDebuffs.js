@@ -34,30 +34,60 @@ const generateRandomBuffDebuff = () => {
 exports.generateRandomBuffDebuff = generateRandomBuffDebuff;
 // Question Management
 const assignExtraQuestion = (teamId) => __awaiter(void 0, void 0, void 0, function* () {
-    const team = yield prisma.team.findUnique({
-        where: { id: teamId },
-        include: { extraQuestions: true }
-    });
-    if (!team)
-        return;
-    const extraQuestion = yield prisma.question.findFirst({
-        where: {
-            type: team.currentPhase === 'PHASE_3' ? 'COMMON' : 'ZONE_CAPTURE',
-            NOT: {
-                id: { in: team.extraQuestions.map(q => q.id) }
-            }
-        },
-        orderBy: { order: 'asc' }
-    });
-    if (extraQuestion) {
-        yield prisma.team.update({
+    try {
+        const team = yield prisma.team.findUnique({
             where: { id: teamId },
-            data: {
-                extraQuestions: {
-                    connect: { id: extraQuestion.id }
-                }
+            include: {
+                answeredQuestions: true,
+                extraQuestions: true,
+                skippedQuestions: true
             }
         });
+        if (!team) {
+            console.error(`Team not found with ID: ${teamId}`);
+            throw new Error('Team not found');
+        }
+        const allowedTypes = [client_1.QuestionType.ZONE_CAPTURE, client_1.QuestionType.COMMON];
+        const extraQuestion = yield prisma.question.findFirst({
+            where: {
+                type: { in: allowedTypes },
+                isUsed: false,
+                NOT: {
+                    id: {
+                        in: [
+                            ...team.answeredQuestions.map(q => q.id),
+                            ...team.extraQuestions.map(q => q.id),
+                            ...team.skippedQuestions.map(q => q.id)
+                        ]
+                    }
+                }
+            },
+            orderBy: { order: 'asc' }
+        });
+        if (!extraQuestion) {
+            console.error(`No available questions for team: ${teamId}`);
+            throw new Error('No available questions for extra question buff');
+        }
+        yield prisma.$transaction([
+            prisma.team.update({
+                where: { id: teamId },
+                data: {
+                    extraQuestions: {
+                        connect: { id: extraQuestion.id }
+                    }
+                }
+            }),
+            prisma.question.update({
+                where: { id: extraQuestion.id },
+                data: { isUsed: true }
+            })
+        ]);
+        console.log(`Successfully assigned extra question ${extraQuestion.id} to team ${teamId}`);
+        return extraQuestion;
+    }
+    catch (error) {
+        console.error('Error in assignExtraQuestion:', error);
+        throw error;
     }
 });
 exports.assignExtraQuestion = assignExtraQuestion;

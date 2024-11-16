@@ -65,7 +65,8 @@ export const startPhase: RequestHandler = async (req, res): Promise<any> => {
 };
 
 export const getNextQuestion: RequestHandler = async (req, res): Promise<any> => {
-    const { teamId, zoneId } = req.params;
+    const { zoneId } = req.body;
+    const teamId = (req as any).user.userId;
     
     const team = await pclient.team.findUnique({
         where: { id: teamId },
@@ -201,11 +202,11 @@ const BUFF_DURATIONS: BuffDurations = {
 };
 
 export const applyBuffDebuff: RequestHandler = async (req, res): Promise<any> => {
-    const { type, targetTeamId, sourceTeamId } = req.body as {
+    const { type, targetTeamId } = req.body as {
         type: BuffDebuffType;
         targetTeamId: string;
-        sourceTeamId: string;
     };
+    const sourceTeamId = (req as any).user.userId;
 
     // Validate source team and available buffs
     const sourceTeam = await pclient.team.findUnique({
@@ -215,6 +216,18 @@ export const applyBuffDebuff: RequestHandler = async (req, res): Promise<any> =>
 
     if (!sourceTeam) {
         return res.status(404).json({ error: 'Source team not found' });
+    }
+
+    // Validate target team is online
+    const targetTeam = await pclient.team.findUnique({
+        where: { 
+            id: targetTeamId,
+            socketId: { not: null }
+        }
+    });
+
+    if (!targetTeam) {
+        return res.status(400).json({ error: 'Target team is not online' });
     }
 
     const availableBuffs = sourceTeam.availableBuffs as BuffDebuffType[];
@@ -341,7 +354,8 @@ export const getGameStatus: RequestHandler = async (req, res): Promise<any> => {
 };
 
 export const answerQuestion: RequestHandler = async (req, res): Promise<any> => {
-    const { teamId, answer, zoneId } = req.body;
+    const { answer, zoneId } = req.body;
+    const teamId = (req as any).user.userId;
     const wss = getSocket();
 
     const team = await pclient.team.findUnique({
@@ -419,8 +433,6 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                                 }
                             })
                         );
-
-                        // Generate buff for zone capture
                         const buff = generateRandomBuffDebuff();
                         transactions.push(
                             pclient.team.update({
@@ -439,13 +451,12 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
 
             case 'PHASE_2': {
                 if (question.type === 'ZONE_CAPTURE' && zoneId) {
-                    // First release any previously captured zones by this team
                     transactions.push(
                         pclient.zone.updateMany({
                             where: { capturedById: teamId },
                             data: { 
                                 capturedById: null,
-                                phase1Complete: true  // Keep phase1Complete true
+                                phase1Complete: true
                             }
                         })
                     );
@@ -456,7 +467,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                             where: { id: zoneId },
                             data: { 
                                 capturedById: teamId,
-                                phase1Complete: true  // Ensure phase1Complete is true
+                                phase1Complete: true
                             }
                         })
                     );
@@ -465,7 +476,6 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
             }
 
             case 'PHASE_3': {
-                // Check if team has a zone from Phase 2 before allowing participation
                 const hasZoneFromPhase2 = await pclient.zone.findFirst({
                     where: { capturedById: teamId }
                 });
@@ -476,7 +486,6 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                     });
                 }
 
-                // Rest of Phase 3 logic
                 if (team.extraQuestions.some(q => q.id === question.id)) {
                     points = Math.floor(points * 1.5); // 50% bonus for extra questions
                     transactions[0] = pclient.team.update({
@@ -518,7 +527,6 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
         }
     }
 
-    // Handle incorrect answer
     await pclient.questionProgress.upsert({
         where: {
             teamId_questionId: {
@@ -537,7 +545,6 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
     return res.status(400).json({ error: 'Incorrect answer' });
 };
 
-// Add API to create phase-specific questions
 interface PhaseQuestionData {
     content: string;
     images: any;
@@ -555,7 +562,6 @@ export const addPhaseQuestion: RequestHandler = async (req, res): Promise<any> =
     };
 
     try {
-        // Validate phase-specific requirements
         switch (phase) {
             case 'PHASE_1':
                 if (!questionData.zoneId) {
@@ -595,7 +601,7 @@ export const addPhaseQuestion: RequestHandler = async (req, res): Promise<any> =
 };
 
 export const adminLockTeam: RequestHandler = async (req, res): Promise<any> => {
-    const { teamId, duration = 1 } = req.body;
+    const { duration = 1, teamId } = req.body;
     const wss = getSocket();
     
     try {
@@ -779,3 +785,84 @@ export const createPhase: RequestHandler = async (req, res): Promise<any> => {
         return res.status(500).json({ error: 'Failed to create phase' });
     }
 };
+
+export const getAvailableBuffs: RequestHandler = async (req, res): Promise<any> => {
+    const teamId = (req as any).user.userId;
+
+    try {
+        const sourceTeam = await pclient.team.findUnique({
+            where: { id: teamId },
+            select: { 
+                availableBuffs: true,
+                currentPhase: true
+            }
+        });
+
+        if (!sourceTeam) {
+            return res.status(404).json({ error: 'Team not found' });
+        }
+
+        const onlineTeams = await pclient.team.findMany({
+            where: {
+                socketId: { not: null },
+                id: { not: teamId }
+            },
+            select: {
+                id: true,
+                teamName: true,
+                isLocked: true
+            }
+        });
+
+        const buffInfo = (sourceTeam.availableBuffs as BuffDebuffType[]).map(buff => ({
+            type: buff,
+            duration: BUFF_DURATIONS[buff],
+            description: getBuffDescription(buff)
+        }));
+
+        return res.json({
+            availableBuffs: buffInfo,
+            targetTeams: onlineTeams
+        });
+    } catch (error) {
+        console.error('Error getting available buffs:', error);
+        return res.status(500).json({ error: 'Failed to get available buffs' });
+    }
+};
+
+export const checkLock = async (req: Request, res: Response): Promise<any> => {
+
+        try {
+        const teamId = (req as any).user.userId;
+        const team = await pclient.team.findUnique({
+            where: {id: teamId},
+            select: {isLocked: true}
+        });
+        if(!team){
+            return res.status(404).json({ error: 'Team not found' });
+        }
+        if(team.isLocked) {
+            return res.status(400).json({ error: 'Team is locked' });
+        } else {
+            return res.status(200).json({ success: true });
+        }
+        } catch (error) {
+            console.error('Error checking lock:', error);
+            return res.status(500).json({ error: 'Failed to check lock' });
+        }
+}
+
+function getBuffDescription(type: BuffDebuffType): string {
+    switch (type) {
+        case 'LOCK_ONE_TEAM':
+            return `Lock a team for ${BUFF_DURATIONS.LOCK_ONE_TEAM} minute(s)`;
+        case 'LOCK_ALL_EXCEPT_ONE':
+            return `Lock all teams except one for ${BUFF_DURATIONS.LOCK_ALL_EXCEPT_ONE} minute(s)`;
+        case 'EXTRA_QUESTION':
+            return 'Give a team an extra question with 50% bonus points';
+        case 'QUESTION_SKIP':
+            return 'Force a team to skip their current question';
+        default:
+            return 'Unknown buff type';
+    }
+}

@@ -20,21 +20,15 @@ const server = (0, http_1.createServer)(app);
 const wss = (0, socketInstance_1.initSocket)(server); // Initialize WebSocket server
 app.use(express_1.default.json());
 app.use((0, cors_1.default)());
-// Routes and middleware
 app.use('/auth', userRoute_1.default);
 app.use(authMiddleware_1.default);
 app.use('/public', publicRoutes_1.default);
-// Initialize socket service
 (0, socketService_1.default)(wss, client_1.default);
-// Pass the wss instance to startUnlockSystem
 (0, buffDebuffs_1.startUnlockSystem)(wss);
 const PORT = process.env.PORT || 6000;
-// Start the server
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
-// Handle graceful shutdown
 process.on('SIGTERM', () => {
-    // Cleanup code if needed...
     process.exit(0);
 });

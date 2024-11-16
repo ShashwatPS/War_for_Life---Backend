@@ -93,7 +93,7 @@ const login = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         const token = jsonwebtoken_1.default.sign({ userId: team.id }, JWT_SECRET, {
             expiresIn: process.env.JWT_EXPIRES_IN,
         });
-        res.json({ message: "Login successful", token });
+        res.json({ message: "Login successful", token, teamId: team.id });
     }
     catch (error) {
         res.status(500).json({ error: "Internal server error" });
