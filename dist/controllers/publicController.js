@@ -1,49 +1,46 @@
-import { Request, Response, RequestHandler } from "express";
-import { BuffDebuffType, GamePhase } from "@prisma/client";
-import { getSocket } from "../services/socketInstance";
-import pclient from "../db/client";
-import { emitLeaderboard, emitTeamsList } from "../services/socketService";
-import {
-    generateRandomBuffDebuff,
-    assignExtraQuestion,
-    skipCurrentQuestion,
-    lockTeam,
-    lockAllTeamsExcept,
-    unlockTeam,
-    unlockAllTeams,
-    getBuff,
-    QUESTION_TYPES
-} from "../helpers/buffDebuffs";
-
-export const startPhase: RequestHandler = async (req, res): Promise<any> => {
-    const { phase }: { phase: GamePhase } = req.body;
-    const io = getSocket();
-
-    await pclient.phase.updateMany({
+"use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.addQuestion = exports.startPhase = void 0;
+const client_1 = require("@prisma/client");
+const socketInstance_1 = require("../services/socketInstance");
+const client_2 = __importDefault(require("../db/client"));
+const socketService_1 = require("../services/socketService");
+const buffDebuffs_1 = require("../helpers/buffDebuffs");
+const startPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { phase } = req.body;
+    const io = (0, socketInstance_1.getSocket)();
+    yield client_2.default.phase.updateMany({
         data: { isActive: false },
     });
-
-    const updatedPhase = await pclient.phase.update({
+    const updatedPhase = yield client_2.default.phase.update({
         where: { phase },
         data: {
             isActive: true,
             startTime: new Date(),
         },
     });
-
-    await pclient.team.updateMany({
+    yield client_2.default.team.updateMany({
         data: { currentPhase: phase },
     });
-
     io.emit("phase-change", { phase, startTime: updatedPhase.startTime });
-
     return res.json({ success: true });
-};
-
-export const addQuestion: RequestHandler = async (req, res): Promise<any> => {
-    const { content, images, correctAnswer, type, zoneId, phaseId, order, points, difficulty } = req.body
-
-    const question = await pclient.question.create({
+});
+exports.startPhase = startPhase;
+const addQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { content, images, correctAnswer, type, zoneId, phaseId, order, points, difficulty } = req.body;
+    const question = yield client_2.default.question.create({
         data: {
             content,
             images,
@@ -55,15 +52,13 @@ export const addQuestion: RequestHandler = async (req, res): Promise<any> => {
             points,
             difficulty
         }
-    })
-
-    return res.json(question)
-}
-
-export const getNextQuestion: RequestHandler = async (req, res): Promise<any> => {
+    });
+    return res.json(question);
+});
+exports.addQuestion = addQuestion;
+const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { teamId, zoneId } = req.params;
-    
-    const team = await pclient.team.findUnique({
+    const team = yield client_2.default.team.findUnique({
         where: { id: teamId },
         include: {
             answeredQuestions: true,
@@ -71,21 +66,17 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             extraQuestions: true
         }
     });
-
     if (!team) {
         return res.status(404).json({ error: 'Team not found' });
     }
-
     let question = null;
-
     switch (team.currentPhase) {
         case 'PHASE_1': {
             if (!zoneId) {
                 return res.status(400).json({ error: 'Zone ID required for Phase 1 questions' });
             }
-
             // Get questions specific to the requested zone that team hasn't answered yet
-            question = await pclient.question.findFirst({
+            question = yield client_2.default.question.findFirst({
                 where: {
                     type: 'ZONE_SPECIFIC',
                     zoneId: zoneId,
@@ -106,10 +97,9 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             });
             break;
         }
-        
         case 'PHASE_2': {
             // Phase 2 remains unchanged - not zone specific
-            question = await pclient.question.findFirst({
+            question = yield client_2.default.question.findFirst({
                 where: {
                     type: 'ZONE_CAPTURE',
                     isUsed: false,
@@ -126,18 +116,16 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             });
             break;
         }
-        
         case 'PHASE_3': {
-            question = await pclient.question.findFirst({
+            question = yield client_2.default.question.findFirst({
                 where: {
                     id: {
                         in: team.extraQuestions.map(q => q.id)
                     }
                 }
             });
-
             if (!question) {
-                question = await pclient.question.findFirst({
+                question = yield client_2.default.question.findFirst({
                     where: {
                         type: 'COMMON',
                         NOT: {
@@ -155,73 +143,53 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             break;
         }
     }
-
     if (question) {
-        await pclient.team.update({
+        yield client_2.default.team.update({
             where: { id: teamId },
             data: { currentQuestionId: question.id }
         });
     }
-
     return res.json(question);
-};
-
-type BuffDurations = {
-    [key in BuffDebuffType]: number;
-};
-
-const BUFF_DURATIONS: BuffDurations = {
+});
+exports.getNextQuestion = getNextQuestion;
+const BUFF_DURATIONS = {
     LOCK_ONE_TEAM: 1,
     LOCK_ALL_EXCEPT_ONE: 0.5,
     EXTRA_QUESTION: 0,
     QUESTION_SKIP: 0
 };
-
-export const applyBuffDebuff: RequestHandler = async (req, res): Promise<any> => {
-    const { type, targetTeamId, sourceTeamId } = req.body as {
-        type: BuffDebuffType;
-        targetTeamId: string;
-        sourceTeamId: string;
-    };
-
+const applyBuffDebuff = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { type, targetTeamId, sourceTeamId } = req.body;
     // Validate source team and available buffs
-    const sourceTeam = await pclient.team.findUnique({
+    const sourceTeam = yield client_2.default.team.findUnique({
         where: { id: sourceTeamId },
         select: { availableBuffs: true, currentPhase: true }
     });
-
     if (!sourceTeam) {
         return res.status(404).json({ error: 'Source team not found' });
     }
-
-    const availableBuffs = sourceTeam.availableBuffs as BuffDebuffType[];
+    const availableBuffs = sourceTeam.availableBuffs;
     if (!availableBuffs.includes(type)) {
         return res.status(400).json({ error: 'Buff not available' });
     }
-
     let expiresAt = new Date();
-    
     try {
         switch (type) {
             case 'LOCK_ONE_TEAM':
-                expiresAt = await lockTeam(targetTeamId, BUFF_DURATIONS.LOCK_ONE_TEAM);
+                expiresAt = yield (0, buffDebuffs_1.lockTeam)(targetTeamId, BUFF_DURATIONS.LOCK_ONE_TEAM);
                 break;
-
             case 'LOCK_ALL_EXCEPT_ONE':
-                expiresAt = await lockAllTeamsExcept(targetTeamId, BUFF_DURATIONS.LOCK_ALL_EXCEPT_ONE);
+                expiresAt = yield (0, buffDebuffs_1.lockAllTeamsExcept)(targetTeamId, BUFF_DURATIONS.LOCK_ALL_EXCEPT_ONE);
                 break;
-
             case 'EXTRA_QUESTION':
-                await assignExtraQuestion(targetTeamId);
+                yield (0, buffDebuffs_1.assignExtraQuestion)(targetTeamId);
                 break;
-
             case 'QUESTION_SKIP':
-                await skipCurrentQuestion(targetTeamId);
+                yield (0, buffDebuffs_1.skipCurrentQuestion)(targetTeamId);
                 break;
         }
-
-        await pclient.$transaction([
-            pclient.buffDebuff.create({
+        yield client_2.default.$transaction([
+            client_2.default.buffDebuff.create({
                 data: {
                     type,
                     appliedById: sourceTeamId,
@@ -231,28 +199,26 @@ export const applyBuffDebuff: RequestHandler = async (req, res): Promise<any> =>
                     isUsed: true
                 }
             }),
-            pclient.team.update({
+            client_2.default.team.update({
                 where: { id: sourceTeamId },
                 data: {
                     availableBuffs: availableBuffs.filter(b => b !== type)
                 }
             })
         ]);
-
-        emitTeamsList(getSocket(), pclient);
+        (0, socketService_1.emitTeamsList)((0, socketInstance_1.getSocket)(), client_2.default);
         return res.json({ success: true, expiresAt });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Error applying buff/debuff:', error);
         return res.status(500).json({ error: 'Failed to apply buff/debuff' });
     }
-};
-
-export const broadcastMessage: RequestHandler = async (req, res): Promise<any> => {
+});
+exports.applyBuffDebuff = applyBuffDebuff;
+const broadcastMessage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { message, senderId, type, priority } = req.body;
-    const io = getSocket();
-
-    const broadcast = await pclient.broadcast.create({
+    const io = (0, socketInstance_1.getSocket)();
+    const broadcast = yield client_2.default.broadcast.create({
         data: {
             message,
             senderId,
@@ -261,14 +227,13 @@ export const broadcastMessage: RequestHandler = async (req, res): Promise<any> =
             pastMessages: {}
         }
     });
-
     io.emit('broadcast', broadcast);
     return res.json(broadcast);
-};
-
-export const getGameStatus: RequestHandler = async (req, res): Promise<any> => {
-    const [teams, zones, currentPhase] = await Promise.all([
-        pclient.team.findMany({
+});
+exports.broadcastMessage = broadcastMessage;
+const getGameStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const [teams, zones, currentPhase] = yield Promise.all([
+        client_2.default.team.findMany({
             select: {
                 id: true,
                 teamName: true,
@@ -278,31 +243,29 @@ export const getGameStatus: RequestHandler = async (req, res): Promise<any> => {
                 capturedZones: { select: { id: true, name: true } }
             }
         }),
-        pclient.zone.findMany({
+        client_2.default.zone.findMany({
             include: {
                 capturedBy: { select: { teamName: true } }
             }
         }),
-        pclient.phase.findFirst({
+        client_2.default.phase.findFirst({
             where: { isActive: true }
         })
     ]);
-
     return res.json({
         teams,
         zones,
         currentPhase,
         timestamp: new Date()
     });
-};
-
-export const answerQuestion: RequestHandler = async (req, res): Promise<any> => {
+});
+exports.getGameStatus = getGameStatus;
+const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { teamId, answer, zoneId } = req.body;
-    const io = getSocket();
-
-    const team = await pclient.team.findUnique({
+    const io = (0, socketInstance_1.getSocket)();
+    const team = yield client_2.default.team.findUnique({
         where: { id: teamId },
-        include: { 
+        include: {
             currentQuestion: {
                 include: {
                     zone: true
@@ -312,49 +275,41 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
             answeredQuestions: true
         }
     });
-
-    if (!team?.currentQuestion) {
+    if (!(team === null || team === void 0 ? void 0 : team.currentQuestion)) {
         return res.status(400).json({ error: 'No active question' });
     }
-
     const question = team.currentQuestion;
     const isCorrect = answer === question.correctAnswer;
-
     if (isCorrect) {
         let points = question.points || 10;
         let transactions = [];
-
         // Base transaction for answering question
-        transactions.push(
-            pclient.team.update({
-                where: { id: teamId },
-                data: {
-                    score: { increment: points },
-                    answeredQuestions: { connect: { id: question.id } },
-                    currentQuestionId: null
-                }
-            }),
-            pclient.questionProgress.create({
-                data: {
-                    teamId,
-                    questionId: question.id,
-                    isCompleted: true,
-                    endTime: new Date()
-                }
-            })
-        );
-
+        transactions.push(client_2.default.team.update({
+            where: { id: teamId },
+            data: {
+                score: { increment: points },
+                answeredQuestions: { connect: { id: question.id } },
+                currentQuestionId: null
+            }
+        }), client_2.default.questionProgress.create({
+            data: {
+                teamId,
+                questionId: question.id,
+                isCompleted: true,
+                endTime: new Date()
+            }
+        }));
         switch (team.currentPhase) {
             case 'PHASE_1': {
                 if (question.type === 'ZONE_SPECIFIC' && zoneId) {
-                    const zoneQuestions = await pclient.$transaction([
-                        pclient.question.count({
+                    const zoneQuestions = yield client_2.default.$transaction([
+                        client_2.default.question.count({
                             where: {
                                 zoneId,
                                 type: 'ZONE_SPECIFIC'
                             }
                         }),
-                        pclient.question.count({
+                        client_2.default.question.count({
                             where: {
                                 zoneId,
                                 type: 'ZONE_SPECIFIC',
@@ -362,57 +317,46 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                             }
                         })
                     ]);
-
                     const [total, answered] = zoneQuestions;
                     if (answered + 1 >= total) {
                         // All zone questions completed, capture zone
-                        transactions.push(
-                            pclient.zone.update({
-                                where: { id: zoneId },
-                                data: {
-                                    capturedById: teamId,
-                                    phase1Complete: true
-                                }
-                            })
-                        );
-
+                        transactions.push(client_2.default.zone.update({
+                            where: { id: zoneId },
+                            data: {
+                                capturedById: teamId,
+                                phase1Complete: true
+                            }
+                        }));
                         // Generate buff for zone capture
-                        const buff = generateRandomBuffDebuff();
-                        transactions.push(
-                            pclient.team.update({
-                                where: { id: teamId },
-                                data: {
-                                    availableBuffs: {
-                                        push: buff
-                                    }
+                        const buff = (0, buffDebuffs_1.generateRandomBuffDebuff)();
+                        transactions.push(client_2.default.team.update({
+                            where: { id: teamId },
+                            data: {
+                                availableBuffs: {
+                                    push: buff
                                 }
-                            })
-                        );
+                            }
+                        }));
                     }
                 }
                 break;
             }
-
             case 'PHASE_2': {
                 if (question.type === 'ZONE_CAPTURE' && zoneId) {
-                    transactions.push(
-                        pclient.zone.updateMany({
-                            where: { capturedById: teamId },
-                            data: { capturedById: null }
-                        }),
-                        pclient.zone.update({
-                            where: { id: zoneId },
-                            data: { capturedById: teamId }
-                        })
-                    );
+                    transactions.push(client_2.default.zone.updateMany({
+                        where: { capturedById: teamId },
+                        data: { capturedById: null }
+                    }), client_2.default.zone.update({
+                        where: { id: zoneId },
+                        data: { capturedById: teamId }
+                    }));
                 }
                 break;
             }
-
             case 'PHASE_3': {
                 if (team.extraQuestions.some(q => q.id === question.id)) {
                     points = Math.floor(points * 1.5); // 50% bonus for extra questions
-                    transactions[0] = pclient.team.update({
+                    transactions[0] = client_2.default.team.update({
                         where: { id: teamId },
                         data: {
                             score: { increment: points },
@@ -427,10 +371,8 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                 break;
             }
         }
-
         try {
-            await pclient.$transaction(transactions);
-
+            yield client_2.default.$transaction(transactions);
             if (zoneId) {
                 io.emit('zone-update', {
                     zoneId,
@@ -438,21 +380,20 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                     phase: team.currentPhase
                 });
             }
-
-            emitLeaderboard(io, pclient);
-            return res.json({ 
-                success: true, 
-                points, 
-                zoneId: zoneId || undefined 
+            (0, socketService_1.emitLeaderboard)(io, client_2.default);
+            return res.json({
+                success: true,
+                points,
+                zoneId: zoneId || undefined
             });
-        } catch (error) {
+        }
+        catch (error) {
             console.error('Transaction failed:', error);
             return res.status(500).json({ error: 'Failed to process answer' });
         }
     }
-
     // Handle incorrect answer
-    await pclient.questionProgress.upsert({
+    yield client_2.default.questionProgress.upsert({
         where: {
             teamId_questionId: {
                 teamId,
@@ -466,109 +407,86 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
             attempts: 1
         }
     });
-
     return res.status(400).json({ error: 'Incorrect answer' });
-};
-
-// Add API to create phase-specific questions
-interface PhaseQuestionData {
-    content: string;
-    images: any;
-    correctAnswer: string;
-    zoneId?: string;
-    order: number;
-    points?: number;
-    difficulty?: string;
-}
-
-export const addPhaseQuestion: RequestHandler = async (req, res): Promise<any> => {
+});
+exports.answerQuestion = answerQuestion;
+const addPhaseQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { phase, questionData } = req.body as {
-            phase: GamePhase;
-            questionData: PhaseQuestionData;
-        };
-
-        if (!Object.values(GamePhase).includes(phase)) {
+        const { phase, questionData } = req.body;
+        if (!Object.values(client_1.GamePhase).includes(phase)) {
             return res.status(400).json({ error: "Invalid phase" });
         }
-
         // Get the phase record first
-        const phaseRecord = await pclient.phase.findUnique({
+        const phaseRecord = yield client_2.default.phase.findUnique({
             where: { phase }
         });
-
         if (!phaseRecord) {
             return res.status(404).json({ error: "Phase not found" });
         }
-
-        const question = await pclient.question.create({
-            data: {
-                ...questionData,
-                type: QUESTION_TYPES[phase],
-                phaseId: phaseRecord.id,
-                points: questionData.points || 10,
-                images: questionData.images || []
-            }
+        const question = yield client_2.default.question.create({
+            data: Object.assign(Object.assign({}, questionData), { type: buffDebuffs_1.QUESTION_TYPES[phase], phaseId: phaseRecord.id, points: questionData.points || 10, images: questionData.images || [] })
         });
-
         return res.json({ success: true, question });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Error adding phase question:', error);
         return res.status(500).json({ error: 'Failed to add question' });
     }
-};
-
-export const adminLockTeam: RequestHandler = async (req, res): Promise<any> => {
+});
+exports.addPhaseQuestion = addPhaseQuestion;
+const adminLockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { teamId, duration = 1 } = req.body;
-    
     try {
-        const expiresAt = await lockTeam(teamId, duration);
+        const expiresAt = yield (0, buffDebuffs_1.lockTeam)(teamId, duration);
         return res.json({ success: true, teamId, expiresAt });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Error locking team:', error);
         return res.status(500).json({ error: 'Failed to lock team' });
     }
-};
-
-export const adminUnlockTeam: RequestHandler = async (req, res): Promise<any> => {
+});
+exports.adminLockTeam = adminLockTeam;
+const adminUnlockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { teamId } = req.body;
-    
     try {
-        await unlockTeam(teamId);
+        yield (0, buffDebuffs_1.unlockTeam)(teamId);
         return res.json({ success: true, teamId });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Error unlocking team:', error);
         return res.status(500).json({ error: 'Failed to unlock team' });
     }
-};
-
-export const adminLockAllTeams: RequestHandler = async (req, res): Promise<any> => {
+});
+exports.adminUnlockTeam = adminUnlockTeam;
+const adminLockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { duration = 1 } = req.body;
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + duration);
-    
     try {
-        await pclient.team.updateMany({
+        yield client_2.default.team.updateMany({
             data: {
                 isLocked: true,
                 lockedUntil: expiresAt
             }
         });
-        const io = getSocket();
+        const io = (0, socketInstance_1.getSocket)();
         io.emit('teams-locked', { expiresAt });
         return res.json({ success: true, expiresAt });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Error locking all teams:', error);
         return res.status(500).json({ error: 'Failed to lock teams' });
     }
-};
-
-export const adminUnlockAllTeams: RequestHandler = async (req, res): Promise<any> => {
+});
+exports.adminLockAllTeams = adminLockAllTeams;
+const adminUnlockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        await unlockAllTeams();
+        yield (0, buffDebuffs_1.unlockAllTeams)();
         return res.json({ success: true });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Error unlocking all teams:', error);
         return res.status(500).json({ error: 'Failed to unlock teams' });
     }
-};
+});
+exports.adminUnlockAllTeams = adminUnlockAllTeams;
