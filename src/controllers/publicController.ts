@@ -65,14 +65,15 @@ export const startPhase: RequestHandler = async (req, res): Promise<any> => {
 };
 
 export const getNextQuestion: RequestHandler = async (req, res): Promise<any> => {
-    const { teamId, zoneId } = req.body;
-
+    const { teamId, zoneId } = req.params;
+    
     const team = await pclient.team.findUnique({
         where: { id: teamId },
         include: {
             answeredQuestions: true,
             skippedQuestions: true,
-            extraQuestions: true
+            extraQuestions: true,
+            capturedZones: true  // Add this to check captured zones
         }
     });
 
@@ -84,6 +85,13 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
 
     switch (team.currentPhase) {
         case 'PHASE_1': {
+            // Add check for already captured zones
+            if (team.capturedZones.length > 0) {
+                return res.status(400).json({ 
+                    error: 'You have already captured a zone in Phase 1. Wait for Phase 2 to capture more zones.' 
+                });
+            }
+
             if (!zoneId) {
                 return res.status(400).json({ error: 'Zone ID required for Phase 1 questions' });
             }
@@ -119,7 +127,7 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             });
             break;
         }
-
+        
         case 'PHASE_2': {
             // Phase 2 remains unchanged - not zone specific
             question = await pclient.question.findFirst({
@@ -139,7 +147,7 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             });
             break;
         }
-
+        
         case 'PHASE_3': {
             question = await pclient.question.findFirst({
                 where: {
@@ -170,19 +178,13 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
     }
 
     if (question) {
-        // Update the team's current question ID
         await pclient.team.update({
             where: { id: teamId },
             data: { currentQuestionId: question.id }
         });
-        // Destructure the question to remove the correctAnswer field
-        const { correctAnswer, ...filteredQuestion } = question;
-
-        // Return the filtered question without correctAnswer
-        return res.json(filteredQuestion);
-    } else {
-        return res.status(404).json({ error: 'No more questions' });
     }
+
+    return res.json(question);
 };
 
 type BuffDurations = {
@@ -220,7 +222,7 @@ export const applyBuffDebuff: RequestHandler = async (req, res): Promise<any> =>
 
     let expiresAt = new Date();
     const wss = getSocket();
-
+    
     try {
         switch (type) {
             case 'LOCK_ONE_TEAM':
