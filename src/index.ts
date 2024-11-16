@@ -1,20 +1,44 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { createServer } from "http";
+import { initSocket, getSocket } from "./services/socketInstance";
+import socketService from "./services/socketService";
 import userRoute from "./routes/userRoute";
 import authMiddleware from "./middleware/authMiddleware";
+import pclient from "./db/client";
+import { startUnlockSystem } from './helpers/buffDebuffs';
+import publicRoutes from "./routes/publicRoutes";
 
 dotenv.config();
+
 const app = express();
+const server = createServer(app);
+const io = initSocket(server); // Initialize Socket.io
 
 app.use(express.json());
 app.use(cors());
 
-app.use('/auth',userRoute)
+// Routes and middleware
+app.use('/auth', userRoute);
 app.use(authMiddleware);
+app.use('/public', publicRoutes);
+
+// Initialize socket service
+socketService(io, pclient);
+
+// Pass the io instance to startUnlockSystem
+startUnlockSystem(io);
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+// Start the server
+server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+});
+
+// Handle graceful shutdown
+process.on('SIGTERM', () => {
+    // Cleanup code if needed...
+    process.exit(0);
 });

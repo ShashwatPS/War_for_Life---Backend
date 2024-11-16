@@ -14,36 +14,76 @@ enum BuffDebuffType {
   LOCK_ALL_EXCEPT_ONE
 }
 
+enum QuestionType {
+  ZONE_SPECIFIC
+  ZONE_CAPTURE
+  COMMON
+}
+
+enum GamePhase {
+  PHASE_1
+  PHASE_2
+  PHASE_3
+}
+
+enum BroadcastType {
+  ADMIN
+  SYSTEM
+  GAME
+}
+
+enum BroadcastPriority {
+  HIGH
+  NORMAL
+  LOW
+}
+
 model Team {
-  id              String       @id @default(cuid())
-  teamName        String       @unique
-  currentZoneId   String?
-  currentZone     Zone?        @relation(fields: [currentZoneId], references: [id], onDelete: Cascade)
-  members         User[]
-  password        String
-  capturedZones   Zone[]       @relation("CapturedZones")
-  buffsDebuffs    BuffDebuff[] @relation("appliedBy")
-  appliedBuffs    BuffDebuff[] @relation("appliedTo")
-  hasCapturedZone Boolean      @default(false)
-  isLocked        Boolean      @default(false)
+  id                String             @id @default(cuid())
+  teamName          String             @unique
+  currentZoneId     String?
+  currentZone       Zone?              @relation(fields: [currentZoneId], references: [id], onDelete: Cascade)
+  members           User[]
+  capturedZones     Zone[]             @relation("CapturedZones")
+  buffsDebuffs      BuffDebuff[]       @relation("appliedBy")
+  appliedBuffs      BuffDebuff[]       @relation("appliedTo")
+  isLocked          Boolean            @default(false)
+  lockedUntil       DateTime?
+  socketId          String?
+  password          String
+  currentQuestion   Question?          @relation(fields: [currentQuestionId], references: [id])
+  currentQuestionId String?
+  answeredQuestions Question[]         @relation("TeamAnsweredQuestions")
+  questionProgress  QuestionProgress[]
+  extraQuestions    Question[]         @relation("ExtraQuestions")
+  skippedQuestions  Question[]         @relation("SkippedQuestions")
+  availableBuffs    Json[]
+  score             Int                @default(0)
+  currentPhase      GamePhase          @default(PHASE_1)
 }
 
 model User {
-  id           String @id @default(cuid())
+  id           String  @id @default(cuid())
   teamId       String
-  enrollmentNo String @unique
+  enrollmentNo String  @unique
   name         String
-  Team         Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  isAdmin      Boolean @default(false)
+  Team         Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
 }
 
 model Zone {
-  id           String       @id @default(cuid())
-  name         String       @unique
-  capturedById String?
-  capturedBy   Team?        @relation("CapturedZones", fields: [capturedById], references: [id], onDelete: SetNull)
-  buffsDebuffs BuffDebuff[]
-  isLocked     Boolean      @default(false)
-  Team         Team[]
+  id                String       @id @default(cuid())
+  name              String       @unique
+  capturedById      String?
+  capturedBy        Team?        @relation("CapturedZones", fields: [capturedById], references: [id], onDelete: SetNull)
+  isLocked          Boolean      @default(false)
+  Team              Team[]
+  BuffDebuff        BuffDebuff[]
+  questions         Question[]
+  currentQuestion   Question?    @relation("ZoneCurrentQuestion", fields: [currentQuestionId], references: [id])
+  currentQuestionId String?
+  phase1Complete    Boolean      @default(false)
+  points            Int          @default(10)
 }
 
 model BuffDebuff {
@@ -52,7 +92,8 @@ model BuffDebuff {
   appliedToId String
   type        BuffDebuffType
   expiresAt   DateTime
-  phase       Int // New: phase in which this buff/debuff is active
+  phase       GamePhase
+  isUsed      Boolean        @default(false)
   appliedBy   Team           @relation("appliedBy", fields: [appliedById], references: [id], onDelete: Cascade)
   appliedTo   Team           @relation("appliedTo", fields: [appliedToId], references: [id], onDelete: Cascade)
   zoneId      String?
@@ -60,8 +101,56 @@ model BuffDebuff {
 }
 
 model Phase {
-  id        String    @id @default(cuid())
-  name      String    @unique
-  isActive  Boolean
+  id        String     @id @default(cuid())
+  phase     GamePhase  @unique
+  isActive  Boolean    @default(false)
   startTime DateTime?
+  endTime   DateTime?
+  questions Question[]
+}
+
+model Question {
+  id                   String             @id @default(cuid())
+  content              String
+  images               Json
+  correctAnswer        String
+  type                 QuestionType
+  zoneId               String?
+  zone                 Zone?              @relation(fields: [zoneId], references: [id])
+  phaseId              String
+  phase                Phase              @relation(fields: [phaseId], references: [id])
+  order                Int
+  points               Int                @default(10)
+  difficulty           String?
+  isUsed               Boolean            @default(false)
+  assignedTeams        Team[]
+  answeredByTeams      Team[]             @relation("TeamAnsweredQuestions")
+  extraForTeams        Team[]             @relation("ExtraQuestions")
+  skippedByTeams       Team[]             @relation("SkippedQuestions")
+  progress             QuestionProgress[]
+  Zone_CurrentQuestion Zone[]             @relation("ZoneCurrentQuestion")
+}
+
+model QuestionProgress {
+  id          String    @id @default(cuid())
+  teamId      String
+  team        Team      @relation(fields: [teamId], references: [id])
+  questionId  String
+  question    Question  @relation(fields: [questionId], references: [id])
+  isCompleted Boolean   @default(false)
+  startTime   DateTime  @default(now())
+  endTime     DateTime?
+  attempts    Int       @default(0)
+
+  @@unique([teamId, questionId])
+}
+
+model Broadcast {
+  id           String            @id @default(cuid())
+  message      String
+  type         BroadcastType
+  priority     BroadcastPriority
+  createdAt    DateTime          @default(now())
+  senderId     String
+  pastMessages Json?
 }
