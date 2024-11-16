@@ -376,7 +376,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
     }
 
     const question = team.currentQuestion;
-    const isCorrect = answer === question.correctAnswer;
+    const isCorrect = answer.toLowerCase() === question.correctAnswer.toLowerCase();
 
     if (isCorrect) {
         let points = question.points || 10;
