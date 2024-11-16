@@ -11,4 +11,4 @@ RUN npx prisma migrate dev --name init
 
 EXPOSE 5000
 
-CMD ["npm", "run", "dev"]git
+CMD ["npm", "run", "dev"]
