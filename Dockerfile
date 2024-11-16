@@ -7,7 +7,7 @@ COPY . .
 RUN npm install
 
 WORKDIR /app/src/db
-RUN npx prisma migrate dev --name init
+RUN npx prisma generate
 
 EXPOSE 3000
 

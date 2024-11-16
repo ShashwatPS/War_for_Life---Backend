@@ -25,7 +25,7 @@ app.use(authMiddleware_1.default);
 app.use('/public', publicRoutes_1.default);
 (0, socketService_1.default)(wss, client_1.default);
 (0, buffDebuffs_1.startUnlockSystem)(wss);
-const PORT = process.env.PORT || 6000;
+const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });

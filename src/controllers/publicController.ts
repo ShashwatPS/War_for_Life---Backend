@@ -180,14 +180,19 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
         }
     }
 
-    if (question) {
-        await pclient.team.update({
-            where: { id: teamId },
-            data: { currentQuestionId: question.id }
-        });
+    if (!question) {
+        return res.status(404).json({ error: "Question not found" });
     }
 
-    return res.json(question);
+// Update team data if the question exists
+    await pclient.team.update({
+        where: { id: teamId },
+        data: { currentQuestionId: question.id }
+    });
+
+// Remove the correctAnswer field before sending the response
+    const { correctAnswer, ...filteredQuestion } = question;
+    return res.json(filteredQuestion);
 };
 
 type BuffDurations = {
@@ -379,7 +384,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
         const question = team.currentQuestion;
         const isCorrect = answer.toLowerCase() === question.correctAnswer.toLowerCase();
 
-        // Get or create question progress
+        // Create or update progress regardless of previous attempts
         const questionProgress = await pclient.questionProgress.upsert({
             where: {
                 teamId_questionId: {
@@ -397,6 +402,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                 questionId: question.id,
                 attempts: 1,
                 isCompleted: isCorrect,
+                startTime: new Date(),
                 ...(isCorrect ? { endTime: new Date() } : {})
             }
         });
@@ -404,136 +410,132 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
         if (isCorrect) {
             let points = question.points || 10;
             let transactions = [];
+            
+            // Only process correct answer if not already answered
+            if (!team.answeredQuestions.some(q => q.id === question.id)) {
+                transactions.push(
+                    pclient.team.update({
+                        where: { id: teamId },
+                        data: {
+                            score: { increment: points },
+                            answeredQuestions: { connect: { id: question.id } },
+                            currentQuestionId: null
+                        }
+                    })
+                );
 
-            // Base transaction for answering question
-            transactions.push(
-                pclient.team.update({
-                    where: { id: teamId },
-                    data: {
-                        score: { increment: points },
-                        answeredQuestions: { connect: { id: question.id } },
-                        currentQuestionId: null
+                // Rest of phase-specific logic
+                switch (team.currentPhase) {
+                    case 'PHASE_1': {
+                        if (question.type === 'ZONE_SPECIFIC' && zoneId) {
+                            const zoneQuestions = await pclient.$transaction([
+                                pclient.question.count({
+                                    where: {
+                                        zoneId,
+                                        type: 'ZONE_SPECIFIC'
+                                    }
+                                }),
+                                pclient.question.count({
+                                    where: {
+                                        zoneId,
+                                        type: 'ZONE_SPECIFIC',
+                                        answeredByTeams: { some: { id: teamId } }
+                                    }
+                                })
+                            ]);
+
+                            const [total, answered] = zoneQuestions;
+                            if (answered + 1 >= total) {
+                                // All zone questions completed, capture zone
+                                transactions.push(
+                                    pclient.zone.update({
+                                        where: { id: zoneId },
+                                        data: {
+                                            capturedById: teamId,
+                                            phase1Complete: true
+                                        }
+                                    })
+                                );
+                                const buff = generateRandomBuffDebuff();
+                                transactions.push(
+                                    pclient.team.update({
+                                        where: { id: teamId },
+                                        data: {
+                                            availableBuffs: {
+                                                push: buff
+                                            }
+                                        }
+                                    })
+                                );
+                            }
+                        }
+                        break;
                     }
-                }),
-                pclient.questionProgress.create({
-                    data: {
-                        teamId,
-                        questionId: question.id,
-                        isCompleted: true,
-                        endTime: new Date()
-                    }
-                })
-            );
 
-            switch (team.currentPhase) {
-                case 'PHASE_1': {
-                    if (question.type === 'ZONE_SPECIFIC' && zoneId) {
-                        const zoneQuestions = await pclient.$transaction([
-                            pclient.question.count({
-                                where: {
-                                    zoneId,
-                                    type: 'ZONE_SPECIFIC'
-                                }
-                            }),
-                            pclient.question.count({
-                                where: {
-                                    zoneId,
-                                    type: 'ZONE_SPECIFIC',
-                                    answeredByTeams: { some: { id: teamId } }
-                                }
-                            })
-                        ]);
+                    case 'PHASE_2': {
+                        if (question.type === 'ZONE_CAPTURE' && zoneId) {
+                            transactions.push(
+                                pclient.zone.updateMany({
+                                    where: { capturedById: teamId },
+                                    data: { 
+                                        capturedById: null,
+                                        phase1Complete: true
+                                    }
+                                })
+                            );
 
-                        const [total, answered] = zoneQuestions;
-                        if (answered + 1 >= total) {
-                            // All zone questions completed, capture zone
+                            // Then capture the new zone
                             transactions.push(
                                 pclient.zone.update({
                                     where: { id: zoneId },
-                                    data: {
+                                    data: { 
                                         capturedById: teamId,
                                         phase1Complete: true
                                     }
                                 })
                             );
-                            const buff = generateRandomBuffDebuff();
-                            transactions.push(
-                                pclient.team.update({
-                                    where: { id: teamId },
-                                    data: {
-                                        availableBuffs: {
-                                            push: buff
-                                        }
-                                    }
-                                })
-                            );
                         }
+                        break;
                     }
-                    break;
-                }
 
-                case 'PHASE_2': {
-                    if (question.type === 'ZONE_CAPTURE' && zoneId) {
-                        transactions.push(
-                            pclient.zone.updateMany({
-                                where: { capturedById: teamId },
-                                data: { 
-                                    capturedById: null,
-                                    phase1Complete: true
-                                }
-                            })
-                        );
-
-                        // Then capture the new zone
-                        transactions.push(
-                            pclient.zone.update({
-                                where: { id: zoneId },
-                                data: { 
-                                    capturedById: teamId,
-                                    phase1Complete: true
-                                }
-                            })
-                        );
-                    }
-                    break;
-                }
-
-                case 'PHASE_3': {
-                    const hasZoneFromPhase2 = await pclient.zone.findFirst({
-                        where: { capturedById: teamId }
-                    });
-
-                    if (!hasZoneFromPhase2) {
-                        return res.status(403).json({ 
-                            error: 'Team must have captured a zone in Phase 2 to participate in Phase 3' 
+                    case 'PHASE_3': {
+                        const hasZoneFromPhase2 = await pclient.zone.findFirst({
+                            where: { capturedById: teamId }
                         });
-                    }
 
-                    if (team.extraQuestions.some(q => q.id === question.id)) {
-                        points = Math.floor(points * 1.5); // 50% bonus for extra questions
-                        transactions[0] = pclient.team.update({
-                            where: { id: teamId },
-                            data: {
-                                score: { increment: points },
-                                answeredQuestions: { connect: { id: question.id } },
-                                currentQuestionId: null,
-                                extraQuestions: {
-                                    disconnect: { id: question.id }
+                        if (!hasZoneFromPhase2) {
+                            return res.status(403).json({ 
+                                error: 'Team must have captured a zone in Phase 2 to participate in Phase 3' 
+                            });
+                        }
+
+                        if (team.extraQuestions.some(q => q.id === question.id)) {
+                            points = Math.floor(points * 1.5); // 50% bonus for extra questions
+                            transactions[0] = pclient.team.update({
+                                where: { id: teamId },
+                                data: {
+                                    score: { increment: points },
+                                    answeredQuestions: { connect: { id: question.id } },
+                                    currentQuestionId: null,
+                                    extraQuestions: {
+                                        disconnect: { id: question.id }
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        }
+                        break;
                     }
-                    break;
                 }
-            }
 
-            try {
                 await pclient.$transaction(transactions);
 
                 if (zoneId) {
                     wss.clients.forEach(client => {
                         if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({ event: 'zone-update', data: { zoneId, teamId, phase: team.currentPhase } }));
+                            client.send(JSON.stringify({ 
+                                event: 'zone-update', 
+                                data: { zoneId, teamId, phase: team.currentPhase } 
+                            }));
                         }
                     });
                 }
@@ -544,17 +546,15 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                     points, 
                     zoneId: zoneId || undefined 
                 });
-            } catch (error) {
-                console.error('Transaction failed:', error);
-                console.error('Transaction failed:', error);
-                return res.status(500).json({ error: 'Failed to process answer' });
+            } else {
+                return res.status(400).json({ error: 'Question already answered' });
             }
         } else {
             return res.json({ 
                 success: false, 
                 error: 'Incorrect answer',
                 attempts: questionProgress.attempts,
-                canRetry: true // Always allow retries
+                canRetry: true
             });
         }
 

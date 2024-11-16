@@ -157,13 +157,17 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
             break;
         }
     }
-    if (question) {
-        yield client_1.default.team.update({
-            where: { id: teamId },
-            data: { currentQuestionId: question.id }
-        });
+    if (!question) {
+        return res.status(404).json({ error: "Question not found" });
     }
-    return res.json(question);
+    // Update team data if the question exists
+    yield client_1.default.team.update({
+        where: { id: teamId },
+        data: { currentQuestionId: question.id }
+    });
+    // Remove the correctAnswer field before sending the response
+    const { correctAnswer } = question, filteredQuestion = __rest(question, ["correctAnswer"]);
+    return res.json(filteredQuestion);
 });
 exports.getNextQuestion = getNextQuestion;
 const BUFF_DURATIONS = {
@@ -309,165 +313,171 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
     const { answer, zoneId } = req.body;
     const teamId = req.user.userId;
     const wss = (0, socketInstance_1.getSocket)();
-    const team = yield client_1.default.team.findUnique({
-        where: { id: teamId },
-        include: {
-            currentQuestion: {
-                include: {
-                    zone: true
+    try {
+        const team = yield client_1.default.team.findUnique({
+            where: { id: teamId },
+            include: {
+                currentQuestion: {
+                    include: {
+                        zone: true
+                    }
+                },
+                extraQuestions: true,
+                answeredQuestions: true
+            }
+        });
+        if (!(team === null || team === void 0 ? void 0 : team.currentQuestion)) {
+            return res.status(400).json({ error: 'No active question' });
+        }
+        const question = team.currentQuestion;
+        const isCorrect = answer.toLowerCase() === question.correctAnswer.toLowerCase();
+        // Create or update progress regardless of previous attempts
+        const questionProgress = yield client_1.default.questionProgress.upsert({
+            where: {
+                teamId_questionId: {
+                    teamId,
+                    questionId: question.id
                 }
             },
-            extraQuestions: true,
-            answeredQuestions: true
-        }
-    });
-    if (!(team === null || team === void 0 ? void 0 : team.currentQuestion)) {
-        return res.status(400).json({ error: 'No active question' });
-    }
-    const question = team.currentQuestion;
-    const isCorrect = answer === question.correctAnswer;
-    if (isCorrect) {
-        let points = question.points || 10;
-        let transactions = [];
-        // Base transaction for answering question
-        transactions.push(client_1.default.team.update({
-            where: { id: teamId },
-            data: {
-                score: { increment: points },
-                answeredQuestions: { connect: { id: question.id } },
-                currentQuestionId: null
-            }
-        }), client_1.default.questionProgress.create({
-            data: {
-                teamId,
-                questionId: question.id,
-                isCompleted: true,
-                endTime: new Date()
-            }
-        }));
-        switch (team.currentPhase) {
-            case 'PHASE_1': {
-                if (question.type === 'ZONE_SPECIFIC' && zoneId) {
-                    const zoneQuestions = yield client_1.default.$transaction([
-                        client_1.default.question.count({
-                            where: {
-                                zoneId,
-                                type: 'ZONE_SPECIFIC'
+            update: Object.assign({ attempts: { increment: 1 }, isCompleted: isCorrect }, (isCorrect ? { endTime: new Date() } : {})),
+            create: Object.assign({ teamId, questionId: question.id, attempts: 1, isCompleted: isCorrect, startTime: new Date() }, (isCorrect ? { endTime: new Date() } : {}))
+        });
+        if (isCorrect) {
+            let points = question.points || 10;
+            let transactions = [];
+            // Only process correct answer if not already answered
+            if (!team.answeredQuestions.some(q => q.id === question.id)) {
+                transactions.push(client_1.default.team.update({
+                    where: { id: teamId },
+                    data: {
+                        score: { increment: points },
+                        answeredQuestions: { connect: { id: question.id } },
+                        currentQuestionId: null
+                    }
+                }));
+                // Rest of phase-specific logic
+                switch (team.currentPhase) {
+                    case 'PHASE_1': {
+                        if (question.type === 'ZONE_SPECIFIC' && zoneId) {
+                            const zoneQuestions = yield client_1.default.$transaction([
+                                client_1.default.question.count({
+                                    where: {
+                                        zoneId,
+                                        type: 'ZONE_SPECIFIC'
+                                    }
+                                }),
+                                client_1.default.question.count({
+                                    where: {
+                                        zoneId,
+                                        type: 'ZONE_SPECIFIC',
+                                        answeredByTeams: { some: { id: teamId } }
+                                    }
+                                })
+                            ]);
+                            const [total, answered] = zoneQuestions;
+                            if (answered + 1 >= total) {
+                                // All zone questions completed, capture zone
+                                transactions.push(client_1.default.zone.update({
+                                    where: { id: zoneId },
+                                    data: {
+                                        capturedById: teamId,
+                                        phase1Complete: true
+                                    }
+                                }));
+                                const buff = (0, buffDebuffs_1.generateRandomBuffDebuff)();
+                                transactions.push(client_1.default.team.update({
+                                    where: { id: teamId },
+                                    data: {
+                                        availableBuffs: {
+                                            push: buff
+                                        }
+                                    }
+                                }));
                             }
-                        }),
-                        client_1.default.question.count({
-                            where: {
-                                zoneId,
-                                type: 'ZONE_SPECIFIC',
-                                answeredByTeams: { some: { id: teamId } }
-                            }
-                        })
-                    ]);
-                    const [total, answered] = zoneQuestions;
-                    if (answered + 1 >= total) {
-                        // All zone questions completed, capture zone
-                        transactions.push(client_1.default.zone.update({
-                            where: { id: zoneId },
-                            data: {
-                                capturedById: teamId,
-                                phase1Complete: true
-                            }
-                        }));
-                        const buff = (0, buffDebuffs_1.generateRandomBuffDebuff)();
-                        transactions.push(client_1.default.team.update({
-                            where: { id: teamId },
-                            data: {
-                                availableBuffs: {
-                                    push: buff
+                        }
+                        break;
+                    }
+                    case 'PHASE_2': {
+                        if (question.type === 'ZONE_CAPTURE' && zoneId) {
+                            transactions.push(client_1.default.zone.updateMany({
+                                where: { capturedById: teamId },
+                                data: {
+                                    capturedById: null,
+                                    phase1Complete: true
                                 }
-                            }
-                        }));
+                            }));
+                            // Then capture the new zone
+                            transactions.push(client_1.default.zone.update({
+                                where: { id: zoneId },
+                                data: {
+                                    capturedById: teamId,
+                                    phase1Complete: true
+                                }
+                            }));
+                        }
+                        break;
+                    }
+                    case 'PHASE_3': {
+                        const hasZoneFromPhase2 = yield client_1.default.zone.findFirst({
+                            where: { capturedById: teamId }
+                        });
+                        if (!hasZoneFromPhase2) {
+                            return res.status(403).json({
+                                error: 'Team must have captured a zone in Phase 2 to participate in Phase 3'
+                            });
+                        }
+                        if (team.extraQuestions.some(q => q.id === question.id)) {
+                            points = Math.floor(points * 1.5); // 50% bonus for extra questions
+                            transactions[0] = client_1.default.team.update({
+                                where: { id: teamId },
+                                data: {
+                                    score: { increment: points },
+                                    answeredQuestions: { connect: { id: question.id } },
+                                    currentQuestionId: null,
+                                    extraQuestions: {
+                                        disconnect: { id: question.id }
+                                    }
+                                }
+                            });
+                        }
+                        break;
                     }
                 }
-                break;
-            }
-            case 'PHASE_2': {
-                if (question.type === 'ZONE_CAPTURE' && zoneId) {
-                    transactions.push(client_1.default.zone.updateMany({
-                        where: { capturedById: teamId },
-                        data: {
-                            capturedById: null,
-                            phase1Complete: true
+                yield client_1.default.$transaction(transactions);
+                if (zoneId) {
+                    wss.clients.forEach(client => {
+                        if (client.readyState === ws_1.WebSocket.OPEN) {
+                            client.send(JSON.stringify({
+                                event: 'zone-update',
+                                data: { zoneId, teamId, phase: team.currentPhase }
+                            }));
                         }
-                    }));
-                    // Then capture the new zone
-                    transactions.push(client_1.default.zone.update({
-                        where: { id: zoneId },
-                        data: {
-                            capturedById: teamId,
-                            phase1Complete: true
-                        }
-                    }));
+                    });
                 }
-                break;
-            }
-            case 'PHASE_3': {
-                const hasZoneFromPhase2 = yield client_1.default.zone.findFirst({
-                    where: { capturedById: teamId }
+                (0, socketService_1.emitLeaderboard)(wss, client_1.default);
+                return res.json({
+                    success: true,
+                    points,
+                    zoneId: zoneId || undefined
                 });
-                if (!hasZoneFromPhase2) {
-                    return res.status(403).json({
-                        error: 'Team must have captured a zone in Phase 2 to participate in Phase 3'
-                    });
-                }
-                if (team.extraQuestions.some(q => q.id === question.id)) {
-                    points = Math.floor(points * 1.5); // 50% bonus for extra questions
-                    transactions[0] = client_1.default.team.update({
-                        where: { id: teamId },
-                        data: {
-                            score: { increment: points },
-                            answeredQuestions: { connect: { id: question.id } },
-                            currentQuestionId: null,
-                            extraQuestions: {
-                                disconnect: { id: question.id }
-                            }
-                        }
-                    });
-                }
-                break;
+            }
+            else {
+                return res.status(400).json({ error: 'Question already answered' });
             }
         }
-        try {
-            yield client_1.default.$transaction(transactions);
-            if (zoneId) {
-                wss.clients.forEach(client => {
-                    if (client.readyState === ws_1.WebSocket.OPEN) {
-                        client.send(JSON.stringify({ event: 'zone-update', data: { zoneId, teamId, phase: team.currentPhase } }));
-                    }
-                });
-            }
-            (0, socketService_1.emitLeaderboard)(wss, client_1.default);
+        else {
             return res.json({
-                success: true,
-                points,
-                zoneId: zoneId || undefined
+                success: false,
+                error: 'Incorrect answer',
+                attempts: questionProgress.attempts,
+                canRetry: true
             });
         }
-        catch (error) {
-            console.error('Transaction failed:', error);
-            return res.status(500).json({ error: 'Failed to process answer' });
-        }
     }
-    yield client_1.default.questionProgress.upsert({
-        where: {
-            teamId_questionId: {
-                teamId,
-                questionId: question.id
-            }
-        },
-        update: { attempts: { increment: 1 } },
-        create: {
-            teamId,
-            questionId: question.id,
-            attempts: 1
-        }
-    });
-    return res.status(400).json({ error: 'Incorrect answer' });
+    catch (error) {
+        console.error('Error processing answer:', error);
+        return res.status(500).json({ error: 'Failed to process answer' });
+    }
 });
 exports.answerQuestion = answerQuestion;
 const addPhaseQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
