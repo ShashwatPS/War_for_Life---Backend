@@ -1,20 +1,20 @@
 import { Router } from "express";
+import { RequestHandler } from "express";
 import * as publicController from "../controllers/publicController";
 
 const router = Router();
 
-// Routes without explicit type casting
-router.post("/start-phase", publicController.startPhase);
-router.post("/add-question", publicController.addQuestion);
-router.post("/game-status", publicController.getGameStatus);
-router.post("/broadcast", publicController.broadcastMessage);
-router.post("/teams/:teamId/next-question", publicController.getNextQuestion);
-router.post("/teams/:teamId/answer", publicController.answerQuestion);
-router.post("/teams/:teamId/buff-debuff", publicController.applyBuffDebuff);
-router.post("/admin/teams/:teamId/lock", publicController.adminLockTeam);
-router.post("/admin/teams/:teamId/unlock", publicController.adminUnlockTeam);
-router.post("/admin/teams/lock-all", publicController.adminLockAllTeams);
-router.post("/admin/teams/unlock-all", publicController.adminUnlockAllTeams);
-router.post("/add-phase-question", publicController.addPhaseQuestion);
+const typedHandler = (handler: RequestHandler): RequestHandler<any, Promise<any>> => handler;
+
+// Routes with return type Promise<any>
+router.get("/game-status", typedHandler(publicController.getGameStatus));
+router.get("/broadcast", typedHandler(publicController.broadcastMessage));
+router.get("/teams/:teamId/next-question", typedHandler(publicController.getNextQuestion));
+router.post("/teams/:teamId/answer", typedHandler(publicController.answerQuestion));
+router.post("/teams/:teamId/buff-debuff", typedHandler(publicController.applyBuffDebuff));
+router.post("/admin/teams/:teamId/lock", typedHandler(publicController.adminLockTeam));
+router.post("/admin/teams/:teamId/unlock", typedHandler(publicController.adminUnlockTeam));
+router.post("/admin/teams/lock-all", typedHandler(publicController.adminLockAllTeams));
+router.post("/admin/teams/unlock-all", typedHandler(publicController.adminUnlockAllTeams));
 
 export default router;

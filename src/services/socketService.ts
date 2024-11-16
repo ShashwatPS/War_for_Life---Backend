@@ -1,31 +1,36 @@
-import { Server as SocketServer } from 'socket.io';
+import { WebSocketServer, WebSocket } from 'ws';
 import { PrismaClient } from '@prisma/client';
 
-const socketService = (io: SocketServer, prisma: PrismaClient) => {
-    io.on('connection', (socket) => {
-        console.log(`New connection: ${socket.id}`);
+const socketService = (wss: WebSocketServer, prisma: PrismaClient) => {
+    wss.on('connection', (ws: WebSocket) => {
+        console.log('New connection');
 
-        socket.on('team-connect', async ({ teamId }) => {
-            try {
-                await prisma.team.update({
-                    where: { id: teamId },
-                    data: { socketId: socket.id },
-                });
-                console.log(`Team ${teamId} connected with socket ${socket.id}`);
-                emitTeamsList(io, prisma);
-                emitLeaderboard(io, prisma);
-            } catch (err) {
-                console.error('Error in team-connect:', err);
+        ws.on('message', async (message) => {
+            const { event, data } = JSON.parse(message.toString());
+
+            if (event === 'team-connect') {
+                const { teamId } = data;
+                try {
+                    await prisma.team.update({
+                        where: { id: teamId },
+                        data: { socketId: (ws as any)._socket.remoteAddress },
+                    });
+                    console.log(`Team ${teamId} connected`);
+                    emitTeamsList(wss, prisma);
+                    emitLeaderboard(wss, prisma);
+                } catch (err) {
+                    console.error('Error in team-connect:', err);
+                }
             }
         });
 
-        socket.on('disconnect', async () => {
+        ws.on('close', async () => {
             try {
                 await prisma.team.updateMany({
-                    where: { socketId: socket.id },
+                    where: { socketId: (ws as any)._socket.remoteAddress },
                     data: { socketId: null },
                 });
-                console.log(`Socket ${socket.id} disconnected`);
+                console.log('Socket disconnected');
             } catch (err) {
                 console.error('Error in disconnect:', err);
             }
@@ -33,7 +38,7 @@ const socketService = (io: SocketServer, prisma: PrismaClient) => {
     });
 };
 
-export async function emitLeaderboard(io: SocketServer, prisma: PrismaClient) {
+export async function emitLeaderboard(wss: WebSocketServer, prisma: PrismaClient) {
     try {
         const leaderboard = await prisma.team.findMany({
             select: {
@@ -50,14 +55,17 @@ export async function emitLeaderboard(io: SocketServer, prisma: PrismaClient) {
             ],
         });
 
-        io.emit('leaderboard-update', leaderboard);
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'leaderboard-update', data: leaderboard }));
+            }
+        });
     } catch (err) {
         console.error('Error emitting leaderboard:', err);
     }
 }
 
-
-export async function emitTeamsList(io: SocketServer, prisma: PrismaClient) {
+export async function emitTeamsList(wss: WebSocketServer, prisma: PrismaClient) {
     try {
         const teams = await prisma.team.findMany({
             select: {
@@ -69,7 +77,11 @@ export async function emitTeamsList(io: SocketServer, prisma: PrismaClient) {
             },
         });
 
-        io.emit('teams-update', teams);
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'teams-update', data: teams }));
+            }
+        });
     } catch (err) {
         console.error('Error emitting teams list:', err);
     }

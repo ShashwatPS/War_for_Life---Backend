@@ -1,7 +1,7 @@
 import { BuffDebuffType, GamePhase, PrismaClient, QuestionType } from "@prisma/client";
 import { getSocket } from "../services/socketInstance";
 import { emitTeamsList } from "../services/socketService";
-import { Server as SocketServer } from 'socket.io';
+import { WebSocketServer } from 'ws';
 
 const prisma = new PrismaClient();
 
@@ -95,8 +95,8 @@ export const lockTeam = async (teamId: string, duration: number): Promise<Date> 
         }
     });
 
-    const io = getSocket();
-    emitTeamsList(io, prisma);
+    const wss = getSocket();
+    emitTeamsList(wss, prisma);
     return expiresAt;
 };
 
@@ -109,8 +109,8 @@ export const unlockTeam = async (teamId: string): Promise<void> => {
         }
     });
 
-    const io = getSocket();
-    emitTeamsList(io, prisma);
+    const wss = getSocket();
+    emitTeamsList(wss, prisma);
 };
 
 export const lockAllTeamsExcept = async (exceptTeamId: string, duration: number): Promise<Date> => {
@@ -127,8 +127,8 @@ export const lockAllTeamsExcept = async (exceptTeamId: string, duration: number)
         }
     });
 
-    const io = getSocket();
-    emitTeamsList(io, prisma);
+    const wss = getSocket();
+    emitTeamsList(wss, prisma);
     return expiresAt;
 };
 
@@ -140,15 +140,14 @@ export const unlockAllTeams = async (): Promise<void> => {
         }
     });
 
-    const io = getSocket();
-    emitTeamsList(io, prisma);
+    const wss = getSocket();
+    emitTeamsList(wss, prisma);
 };
 
-
-export const startUnlockSystem = (io: SocketServer): NodeJS.Timeout => {
-    if (!io) {
-        console.error('Socket.io instance not provided to startUnlockSystem');
-        return setInterval(() => {}, 1000); // Return dummy interval in case of error
+export const startUnlockSystem = (wss: WebSocketServer): NodeJS.Timeout => {
+    if (!wss) {
+        console.error('WebSocket server not provided to startUnlockSystem');
+        return setInterval(() => {}, 1000);
     }
 
     return setInterval(async () => {
@@ -171,7 +170,7 @@ export const startUnlockSystem = (io: SocketServer): NodeJS.Timeout => {
                         lockedUntil: null
                     }
                 });
-                emitTeamsList(io, prisma);
+                emitTeamsList(wss, prisma);
             }
         } catch (error) {
             console.error('Error in auto unlock interval:', error);

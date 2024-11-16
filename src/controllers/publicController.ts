@@ -17,7 +17,7 @@ import {
 
 export const startPhase: RequestHandler = async (req, res): Promise<any> => {
     const { phase }: { phase: GamePhase } = req.body;
-    const io = getSocket();
+    const wss = getSocket();
 
     await pclient.phase.updateMany({
         data: { isActive: false },
@@ -35,7 +35,11 @@ export const startPhase: RequestHandler = async (req, res): Promise<any> => {
         data: { currentPhase: phase },
     });
 
-    io.emit("phase-change", { phase, startTime: updatedPhase.startTime });
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ event: 'phase-change', data: { phase, startTime: updatedPhase.startTime } }));
+        }
+    });
 
     return res.json({ success: true });
 };
@@ -250,7 +254,7 @@ export const applyBuffDebuff: RequestHandler = async (req, res): Promise<any> =>
 
 export const broadcastMessage: RequestHandler = async (req, res): Promise<any> => {
     const { message, senderId, type, priority } = req.body;
-    const io = getSocket();
+    const wss = getSocket();
 
     const broadcast = await pclient.broadcast.create({
         data: {
@@ -262,7 +266,12 @@ export const broadcastMessage: RequestHandler = async (req, res): Promise<any> =
         }
     });
 
-    io.emit('broadcast', broadcast);
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ event: 'broadcast', data: broadcast }));
+        }
+    });
+
     return res.json(broadcast);
 };
 
@@ -298,7 +307,7 @@ export const getGameStatus: RequestHandler = async (req, res): Promise<any> => {
 
 export const answerQuestion: RequestHandler = async (req, res): Promise<any> => {
     const { teamId, answer, zoneId } = req.body;
-    const io = getSocket();
+    const wss = getSocket();
 
     const team = await pclient.team.findUnique({
         where: { id: teamId },
@@ -432,14 +441,14 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
             await pclient.$transaction(transactions);
 
             if (zoneId) {
-                io.emit('zone-update', {
-                    zoneId,
-                    teamId,
-                    phase: team.currentPhase
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({ event: 'zone-update', data: { zoneId, teamId, phase: team.currentPhase } }));
+                    }
                 });
             }
 
-            emitLeaderboard(io, pclient);
+            emitLeaderboard(wss, pclient);
             return res.json({ 
                 success: true, 
                 points, 
