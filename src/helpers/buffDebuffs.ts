@@ -34,34 +34,55 @@ export const generateRandomBuffDebuff = (): BuffDebuffType => {
 };
 
 // Question Management
-export const assignExtraQuestion = async (teamId: string): Promise<void> => {
+export const assignExtraQuestion = async (teamId: string) => {
     const team = await prisma.team.findUnique({
         where: { id: teamId },
-        include: { extraQuestions: true }
+        include: {
+            answeredQuestions: true,
+            extraQuestions: true,
+            skippedQuestions: true
+        }
     });
 
-    if (!team) return;
+    if (!team) throw new Error('Team not found');
 
+    // Get a new question based on team's current phase
     const extraQuestion = await prisma.question.findFirst({
         where: {
-            type: team.currentPhase === 'PHASE_3' ? 'COMMON' : 'ZONE_CAPTURE',
+            type: QUESTION_TYPES[team.currentPhase],
+            isUsed: false,  // Only get unused questions
             NOT: {
-                id: { in: team.extraQuestions.map(q => q.id) }
+                id: {
+                    in: [
+                        ...team.answeredQuestions.map(q => q.id),
+                        ...team.extraQuestions.map(q => q.id),
+                        ...team.skippedQuestions.map(q => q.id)
+                    ]
+                }
             }
         },
         orderBy: { order: 'asc' }
     });
 
-    if (extraQuestion) {
-        await prisma.team.update({
+    if (!extraQuestion) throw new Error('No available questions for extra question buff');
+
+    // Transaction ensures both operations happen together
+    await prisma.$transaction([
+        prisma.team.update({
             where: { id: teamId },
             data: {
                 extraQuestions: {
                     connect: { id: extraQuestion.id }
                 }
             }
-        });
-    }
+        }),
+        prisma.question.update({
+            where: { id: extraQuestion.id },
+            data: { isUsed: true }
+        })
+    ]);
+
+    return extraQuestion;
 };
 
 export const skipCurrentQuestion = async (teamId: string): Promise<void> => {

@@ -149,17 +149,7 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
         }
         
         case 'PHASE_3': {
-            // Check if team has a zone from Phase 2 before providing questions
-            const hasZoneFromPhase2 = await pclient.zone.findFirst({
-                where: { capturedById: teamId }
-            });
-
-            if (!hasZoneFromPhase2) {
-                return res.status(403).json({ 
-                    error: 'Team must have captured a zone in Phase 2 to participate in Phase 3' 
-                });
-            }
-
+            // First check for extra questions
             question = await pclient.question.findFirst({
                 where: {
                     id: {
@@ -168,6 +158,7 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
                 }
             });
 
+            // If no extra questions, get regular question
             if (!question) {
                 question = await pclient.question.findFirst({
                     where: {
