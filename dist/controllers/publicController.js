@@ -23,7 +23,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getCurrentPhase = exports.checkLock = exports.getAvailableBuffs = exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
+exports.getZoneStatus = exports.getCurrentPhase = exports.checkLock = exports.getAvailableBuffs = exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
 const socketInstance_1 = require("../services/socketInstance");
 const client_1 = __importDefault(require("../db/client"));
 const socketService_1 = require("../services/socketService");
@@ -382,6 +382,21 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
                                         phase1Complete: true
                                     }
                                 }));
+                                // Emit zone capture event
+                                wss.clients.forEach(client => {
+                                    if (client.readyState === ws_1.WebSocket.OPEN) {
+                                        client.send(JSON.stringify({
+                                            event: 'zone-captured',
+                                            data: {
+                                                zoneId,
+                                                teamId,
+                                                teamName: team.teamName,
+                                                phase: 'PHASE_1',
+                                                timestamp: new Date()
+                                            }
+                                        }));
+                                    }
+                                });
                                 const buff = (0, buffDebuffs_1.generateRandomBuffDebuff)();
                                 transactions.push(client_1.default.team.update({
                                     where: { id: teamId },
@@ -412,6 +427,21 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
                                     phase1Complete: true
                                 }
                             }));
+                            // Emit zone capture event
+                            wss.clients.forEach(client => {
+                                if (client.readyState === ws_1.WebSocket.OPEN) {
+                                    client.send(JSON.stringify({
+                                        event: 'zone-captured',
+                                        data: {
+                                            zoneId,
+                                            teamId,
+                                            teamName: team.teamName,
+                                            phase: 'PHASE_2',
+                                            timestamp: new Date()
+                                        }
+                                    }));
+                                }
+                            });
                         }
                         break;
                     }
@@ -546,17 +576,36 @@ const adminUnlockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function
     const { teamId } = req.body;
     const wss = (0, socketInstance_1.getSocket)();
     try {
-        yield (0, buffDebuffs_1.unlockTeam)(teamId);
+        if (!teamId) {
+            return res.status(400).json({ error: "Team ID is required" });
+        }
+        const team = yield client_1.default.team.findUnique({
+            where: { id: teamId },
+            select: { isLocked: true }
+        });
+        if (!team) {
+            return res.status(404).json({ error: "Team not found" });
+        }
+        if (!team.isLocked) {
+            return res.json({ message: "Team is already unlocked" });
+        }
+        yield client_1.default.team.update({
+            where: { id: teamId },
+            data: {
+                isLocked: false,
+                lockedUntil: null
+            }
+        });
         wss.clients.forEach(client => {
             if (client.readyState === ws_1.WebSocket.OPEN) {
                 client.send(JSON.stringify({ event: 'team-unlocked', data: { teamId } }));
             }
         });
-        return res.json({ success: true, teamId });
+        return res.json({ message: "Team unlocked successfully" });
     }
     catch (error) {
-        console.error('Error unlocking team:', error);
-        return res.status(500).json({ error: 'Failed to unlock team' });
+        console.error("Error unlocking team:", error);
+        return res.status(500).json({ error: "Failed to unlock team" });
     }
 });
 exports.adminUnlockTeam = adminUnlockTeam;
@@ -779,7 +828,6 @@ function getBuffDescription(type) {
             return 'Unknown buff type';
     }
 }
-// Add this new endpoint
 const getCurrentPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const currentPhase = yield client_1.default.phase.findFirst({
@@ -797,5 +845,32 @@ const getCurrentPhase = (req, res) => __awaiter(void 0, void 0, void 0, function
     }
 });
 exports.getCurrentPhase = getCurrentPhase;
-// In the answerQuestion handler, modify the zone capture broadcast:
-// Inside the if(isCorrect) block, after transactions are executed:
+const getZoneStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const zones = yield client_1.default.zone.findMany({
+            select: {
+                id: true,
+                name: true,
+                phase1Complete: true,
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            },
+            orderBy: {
+                name: 'asc'
+            }
+        });
+        return res.json({
+            zones,
+            timestamp: new Date()
+        });
+    }
+    catch (error) {
+        console.error('Error getting zone status:', error);
+        return res.status(500).json({ error: 'Failed to get zone status' });
+    }
+});
+exports.getZoneStatus = getZoneStatus;

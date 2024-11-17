@@ -452,6 +452,23 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                                         }
                                     })
                                 );
+
+                                // Emit zone capture event
+                                wss.clients.forEach(client => {
+                                    if (client.readyState === WebSocket.OPEN) {
+                                        client.send(JSON.stringify({
+                                            event: 'zone-captured',
+                                            data: {
+                                                zoneId,
+                                                teamId,
+                                                teamName: team.teamName,
+                                                phase: 'PHASE_1',
+                                                timestamp: new Date()
+                                            }
+                                        }));
+                                    }
+                                });
+
                                 const buff = generateRandomBuffDebuff();
                                 transactions.push(
                                     pclient.team.update({
@@ -490,6 +507,22 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                                     }
                                 })
                             );
+
+                            // Emit zone capture event
+                            wss.clients.forEach(client => {
+                                if (client.readyState === WebSocket.OPEN) {
+                                    client.send(JSON.stringify({
+                                        event: 'zone-captured',
+                                        data: {
+                                            zoneId,
+                                            teamId,
+                                            teamName: team.teamName,
+                                            phase: 'PHASE_2',
+                                            timestamp: new Date()
+                                        }
+                                    }));
+                                }
+                            });
                         }
                         break;
                     }
@@ -647,18 +680,42 @@ export const adminLockTeam: RequestHandler = async (req, res): Promise<any> => {
 export const adminUnlockTeam: RequestHandler = async (req, res): Promise<any> => {
     const { teamId } = req.body;
     const wss = getSocket();
-    
+
     try {
-        await unlockTeam(teamId);
+        if (!teamId) {
+            return res.status(400).json({ error: "Team ID is required" });
+        }
+
+        const team = await pclient.team.findUnique({
+            where: { id: teamId },
+            select: { isLocked: true }
+        });
+
+        if (!team) {
+            return res.status(404).json({ error: "Team not found" });
+        }
+
+        if (!team.isLocked) {
+            return res.json({ message: "Team is already unlocked" });
+        }
+
+        await pclient.team.update({
+            where: { id: teamId },
+            data: {
+                isLocked: false,
+                lockedUntil: null
+            }
+        });
         wss.clients.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(JSON.stringify({ event: 'team-unlocked', data: { teamId } }));
             }
         });
-        return res.json({ success: true, teamId });
+
+        return res.json({ message: "Team unlocked successfully" });
     } catch (error) {
-        console.error('Error unlocking team:', error);
-        return res.status(500).json({ error: 'Failed to unlock team' });
+        console.error("Error unlocking team:", error);
+        return res.status(500).json({ error: "Failed to unlock team" });
     }
 };
 
@@ -893,7 +950,6 @@ function getBuffDescription(type: BuffDebuffType): string {
     }
 }
 
-// Add this new endpoint
 export const getCurrentPhase: RequestHandler = async (req, res): Promise<any> => {
     try {
         const currentPhase = await pclient.phase.findFirst({
@@ -911,16 +967,31 @@ export const getCurrentPhase: RequestHandler = async (req, res): Promise<any> =>
     }
 };
 
-export const getPhase1ZoneStatus = async (req: Request, res: Response): Promise<any> => {
+export const getZoneStatus: RequestHandler = async (req, res): Promise<any> => {
     try {
         const zones = await pclient.zone.findMany({
-            where: {
-                phase1Complete: true
+            select: {
+                id: true,
+                name: true,
+                phase1Complete: true,
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            },
+            orderBy: {
+                name: 'asc'
             }
-        })
-        res.status(200).json(zones);
+        });
+
+        return res.json({
+            zones,
+            timestamp: new Date()
+        });
     } catch (error) {
-        console.error('Error getting phase 1 zone status:', error);
-        return res.status(500).json({ error: 'Failed to get phase 1 zone status' });
+        console.error('Error getting zone status:', error);
+        return res.status(500).json({ error: 'Failed to get zone status' });
     }
-}
+};

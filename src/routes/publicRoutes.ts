@@ -23,7 +23,7 @@ router.post("/admin/change-phase", typedHandler(publicController.changePhase));
 router.post("/check-lock", typedHandler(publicController.checkLock));
 
 router.get("/current-phase", typedHandler(publicController.getCurrentPhase));
-router.get("/phase-1-zones", typedHandler(publicController.getPhase1ZoneStatus));
+router.get("/ZoneStatus", typedHandler(publicController.getZoneStatus));
 
 router.post("/admin/zones/create", typedHandler(publicController.createZone));
 router.post("/admin/zones/update", typedHandler(publicController.updateZone));
