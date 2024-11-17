@@ -23,7 +23,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getZoneStatus = exports.getCurrentPhase = exports.checkLock = exports.getAvailableBuffs = exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
+exports.getBroadcasts = exports.getZoneStatus = exports.getCurrentPhase = exports.checkLock = exports.getAvailableBuffs = exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
 const socketInstance_1 = require("../services/socketInstance");
 const client_1 = __importDefault(require("../db/client"));
 const socketService_1 = require("../services/socketService");
@@ -874,3 +874,22 @@ const getZoneStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* 
     }
 });
 exports.getZoneStatus = getZoneStatus;
+const getBroadcasts = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const broadcasts = yield client_1.default.broadcast.findMany({
+            orderBy: { createdAt: 'desc' },
+            select: {
+                id: true,
+                message: true,
+                priority: true,
+                createdAt: true,
+            }
+        });
+        return res.json(broadcasts);
+    }
+    catch (error) {
+        console.error('Error getting broadcasts:', error);
+        return res.status(500).json({ error: 'Failed to get broadcasts' });
+    }
+});
+exports.getBroadcasts = getBroadcasts;

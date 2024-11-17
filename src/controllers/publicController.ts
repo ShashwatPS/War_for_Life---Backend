@@ -995,3 +995,21 @@ export const getZoneStatus: RequestHandler = async (req, res): Promise<any> => {
         return res.status(500).json({ error: 'Failed to get zone status' });
     }
 };
+
+export const getBroadcasts: RequestHandler = async (req, res): Promise<any> => {
+    try {
+        const broadcasts = await pclient.broadcast.findMany({
+            orderBy: { createdAt: 'desc' },
+            select: {
+                id: true,
+                message: true,
+                priority: true,
+                createdAt: true,
+            }
+        });
+        return res.json(broadcasts);
+    } catch (error) {
+        console.error('Error getting broadcasts:', error);
+        return res.status(500).json({ error: 'Failed to get broadcasts' });
+    }
+}
