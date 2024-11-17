@@ -23,7 +23,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.checkLock = exports.getAvailableBuffs = exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
+exports.getCurrentPhase = exports.checkLock = exports.getAvailableBuffs = exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
 const socketInstance_1 = require("../services/socketInstance");
 const client_1 = __importDefault(require("../db/client"));
 const socketService_1 = require("../services/socketService");
@@ -62,7 +62,7 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
             answeredQuestions: true,
             skippedQuestions: true,
             extraQuestions: true,
-            capturedZones: true // Add this to check captured zones
+            capturedZones: true
         }
     });
     if (!team) {
@@ -71,7 +71,6 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
     let question = null;
     switch (team.currentPhase) {
         case 'PHASE_1': {
-            // Add check for already captured zones
             if (team.capturedZones.length > 0) {
                 return res.status(400).json({
                     error: 'You have already captured a zone in Phase 1. Wait for Phase 2 to capture more zones.'
@@ -80,14 +79,12 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
             if (!zoneId) {
                 return res.status(400).json({ error: 'Zone ID required for Phase 1 questions' });
             }
-            // Check if zone is already completed by another team
             const zone = yield client_1.default.zone.findUnique({
                 where: { id: zoneId }
             });
             if ((zone === null || zone === void 0 ? void 0 : zone.phase1Complete) && zone.capturedById !== teamId) {
                 return res.status(400).json({ error: 'Zone is already captured' });
             }
-            // Get questions specific to the requested zone that team hasn't answered yet
             question = yield client_1.default.question.findFirst({
                 where: {
                     type: 'ZONE_SPECIFIC',
@@ -98,7 +95,6 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
                         }
                     },
                     zone: {
-                        // Ensure zone isn't phase 1 complete
                         phase1Complete: false
                     }
                 },
@@ -110,7 +106,6 @@ const getNextQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function
             break;
         }
         case 'PHASE_2': {
-            // Phase 2 remains unchanged - not zone specific
             question = yield client_1.default.question.findFirst({
                 where: {
                     type: 'ZONE_CAPTURE',
@@ -295,6 +290,9 @@ const getGameStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* 
         client_1.default.zone.findMany({
             include: {
                 capturedBy: { select: { teamName: true } }
+            },
+            orderBy: {
+                name: 'asc' // Add this ordering
             }
         }),
         client_1.default.phase.findFirst({
@@ -444,12 +442,22 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
                     }
                 }
                 yield client_1.default.$transaction(transactions);
-                if (zoneId) {
+                const [teamName, zoneName] = yield client_1.default.$transaction([
+                    client_1.default.team.findFirst({ where: { id: teamId }, select: { teamName: true } }),
+                    client_1.default.zone.findFirst({ where: { id: zoneId }, select: { name: true } })
+                ]);
+                if (zoneId) { // Only send zone update if zoneId exists
                     wss.clients.forEach(client => {
                         if (client.readyState === ws_1.WebSocket.OPEN) {
                             client.send(JSON.stringify({
                                 event: 'zone-update',
-                                data: { zoneId, teamId, phase: team.currentPhase }
+                                data: {
+                                    zoneId, // ID of the zone being updated
+                                    teamId, // ID of the team that answered correctly
+                                    phase: team.currentPhase, // Current game phase
+                                    teamName, // Name of the team
+                                    zoneName // Name of the zone
+                                }
                             }));
                         }
                     });
@@ -771,3 +779,23 @@ function getBuffDescription(type) {
             return 'Unknown buff type';
     }
 }
+// Add this new endpoint
+const getCurrentPhase = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const currentPhase = yield client_1.default.phase.findFirst({
+            where: { isActive: true },
+            select: {
+                phase: true,
+                startTime: true
+            }
+        });
+        return res.json(currentPhase || { phase: null, startTime: null });
+    }
+    catch (error) {
+        console.error('Error getting current phase:', error);
+        return res.status(500).json({ error: 'Failed to get current phase' });
+    }
+});
+exports.getCurrentPhase = getCurrentPhase;
+// In the answerQuestion handler, modify the zone capture broadcast:
+// Inside the if(isCorrect) block, after transactions are executed:

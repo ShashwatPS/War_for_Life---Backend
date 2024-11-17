@@ -42,6 +42,7 @@ router.post("/add-phase-question", typedHandler(publicController.addPhaseQuestio
 router.post("/leaderboard", typedHandler(publicController.getLeaderboard));
 router.post("/admin/change-phase", typedHandler(publicController.changePhase));
 router.post("/check-lock", typedHandler(publicController.checkLock));
+router.get("/current-phase", typedHandler(publicController.getCurrentPhase));
 router.post("/admin/zones/create", typedHandler(publicController.createZone));
 router.post("/admin/zones/update", typedHandler(publicController.updateZone));
 router.post("/admin/phases/create", typedHandler(publicController.createPhase));

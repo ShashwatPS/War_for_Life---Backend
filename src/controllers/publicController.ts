@@ -23,7 +23,6 @@ interface ZoneData {
     order: number;
 }
 
-// Update QuestionData interface
 interface QuestionData {
     content: string;
     correctAnswer: string;
@@ -74,7 +73,7 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             answeredQuestions: true,
             skippedQuestions: true,
             extraQuestions: true,
-            capturedZones: true  // Add this to check captured zones
+            capturedZones: true
         }
     });
 
@@ -86,7 +85,6 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
 
     switch (team.currentPhase) {
         case 'PHASE_1': {
-            // Add check for already captured zones
             if (team.capturedZones.length > 0) {
                 return res.status(400).json({ 
                     error: 'You have already captured a zone in Phase 1. Wait for Phase 2 to capture more zones.' 
@@ -97,7 +95,6 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
                 return res.status(400).json({ error: 'Zone ID required for Phase 1 questions' });
             }
 
-            // Check if zone is already completed by another team
             const zone = await pclient.zone.findUnique({
                 where: { id: zoneId }
             });
@@ -105,8 +102,6 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
             if (zone?.phase1Complete && zone.capturedById !== teamId) {
                 return res.status(400).json({ error: 'Zone is already captured' });
             }
-
-            // Get questions specific to the requested zone that team hasn't answered yet
             question = await pclient.question.findFirst({
                 where: {
                     type: 'ZONE_SPECIFIC',
@@ -117,7 +112,6 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
                         }
                     },
                     zone: {
-                        // Ensure zone isn't phase 1 complete
                         phase1Complete: false
                     }
                 },
@@ -130,7 +124,6 @@ export const getNextQuestion: RequestHandler = async (req, res): Promise<any> =>
         }
         
         case 'PHASE_2': {
-            // Phase 2 remains unchanged - not zone specific
             question = await pclient.question.findFirst({
                 where: {
                     type: 'ZONE_CAPTURE',
@@ -343,6 +336,9 @@ export const getGameStatus: RequestHandler = async (req, res): Promise<any> => {
         pclient.zone.findMany({
             include: {
                 capturedBy: { select: { teamName: true } }
+            },
+            orderBy: {
+                name: 'asc'  // Add this ordering
             }
         }),
         pclient.phase.findFirst({
@@ -366,7 +362,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
     try {
         const team = await pclient.team.findUnique({
             where: { id: teamId },
-            include: { 
+            include: {
                 currentQuestion: {
                     include: {
                         zone: true
@@ -410,7 +406,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
         if (isCorrect) {
             let points = question.points || 10;
             let transactions = [];
-            
+
             // Only process correct answer if not already answered
             if (!team.answeredQuestions.some(q => q.id === question.id)) {
                 transactions.push(
@@ -477,7 +473,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                             transactions.push(
                                 pclient.zone.updateMany({
                                     where: { capturedById: teamId },
-                                    data: { 
+                                    data: {
                                         capturedById: null,
                                         phase1Complete: true
                                     }
@@ -488,7 +484,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                             transactions.push(
                                 pclient.zone.update({
                                     where: { id: zoneId },
-                                    data: { 
+                                    data: {
                                         capturedById: teamId,
                                         phase1Complete: true
                                     }
@@ -504,8 +500,8 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                         });
 
                         if (!hasZoneFromPhase2) {
-                            return res.status(403).json({ 
-                                error: 'Team must have captured a zone in Phase 2 to participate in Phase 3' 
+                            return res.status(403).json({
+                                error: 'Team must have captured a zone in Phase 2 to participate in Phase 3'
                             });
                         }
 
@@ -529,29 +525,40 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
 
                 await pclient.$transaction(transactions);
 
-                if (zoneId) {
+                const [teamName, zoneName] = await pclient.$transaction([
+                    pclient.team.findFirst({ where: { id: teamId }, select: { teamName: true } }),
+                    pclient.zone.findFirst({ where: { id: zoneId }, select: { name: true } })
+                ]);
+
+                if (zoneId) {  // Only send zone update if zoneId exists
                     wss.clients.forEach(client => {
                         if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({ 
-                                event: 'zone-update', 
-                                data: { zoneId, teamId, phase: team.currentPhase } 
+                            client.send(JSON.stringify({
+                                event: 'zone-update',
+                                data: { 
+                                    zoneId,          // ID of the zone being updated
+                                    teamId,          // ID of the team that answered correctly
+                                    phase: team.currentPhase,  // Current game phase
+                                    teamName,        // Name of the team
+                                    zoneName         // Name of the zone
+                                }
                             }));
                         }
                     });
                 }
 
                 emitLeaderboard(wss, pclient);
-                return res.json({ 
-                    success: true, 
-                    points, 
-                    zoneId: zoneId || undefined 
+                return res.json({
+                    success: true,
+                    points,
+                    zoneId: zoneId || undefined
                 });
             } else {
                 return res.status(400).json({ error: 'Question already answered' });
             }
         } else {
-            return res.json({ 
-                success: false, 
+            return res.json({
+                success: false,
                 error: 'Incorrect answer',
                 attempts: questionProgress.attempts,
                 canRetry: true
@@ -883,5 +890,37 @@ function getBuffDescription(type: BuffDebuffType): string {
             return 'Force a team to skip their current question';
         default:
             return 'Unknown buff type';
+    }
+}
+
+// Add this new endpoint
+export const getCurrentPhase: RequestHandler = async (req, res): Promise<any> => {
+    try {
+        const currentPhase = await pclient.phase.findFirst({
+            where: { isActive: true },
+            select: {
+                phase: true,
+                startTime: true
+            }
+        });
+        
+        return res.json(currentPhase || { phase: null, startTime: null });
+    } catch (error) {
+        console.error('Error getting current phase:', error);
+        return res.status(500).json({ error: 'Failed to get current phase' });
+    }
+};
+
+export const getPhase1ZoneStatus = async (req: Request, res: Response): Promise<any> => {
+    try {
+        const zones = await pclient.zone.findMany({
+            where: {
+                phase1Complete: true
+            }
+        })
+        res.status(200).json(zones);
+    } catch (error) {
+        console.error('Error getting phase 1 zone status:', error);
+        return res.status(500).json({ error: 'Failed to get phase 1 zone status' });
     }
 }
