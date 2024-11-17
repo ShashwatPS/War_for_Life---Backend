@@ -2,7 +2,7 @@ import { Request, Response, RequestHandler } from "express";
 import { BuffDebuffType, GamePhase, QuestionType } from "@prisma/client";
 import { getSocket } from "../services/socketInstance";
 import pclient from "../db/client";
-import { emitLeaderboard, emitTeamsList } from "../services/socketService";
+import { emitLeaderboard, emitTeamsList, emitZoneStatus } from "../services/socketService";
 import {
     generateRandomBuffDebuff,
     assignExtraQuestion,
@@ -665,6 +665,21 @@ export const adminLockTeam: RequestHandler = async (req, res): Promise<any> => {
     
     try {
         const expiresAt = await lockTeam(teamId, duration);
+        
+        // Set up unlock timer
+        setTimeout(async () => {
+            try {
+                await unlockTeam(teamId);
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({ event: 'team-unlocked', data: { teamId } }));
+                    }
+                });
+            } catch (error) {
+                console.error('Error in auto unlock:', error);
+            }
+        }, duration * 60 * 1000);
+
         wss.clients.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(JSON.stringify({ event: 'team-locked', data: { teamId, expiresAt } }));
@@ -757,7 +772,7 @@ export const adminUnlockAllTeams: RequestHandler = async (req, res): Promise<any
         return res.json({ success: true });
     } catch (error) {
         console.error('Error unlocking all teams:', error);
-        return res.status(500).json({ error: 'Failed to unlock teams' });
+        return res.status(500).json({ error: 'Failed to unlock all teams' });
     }
 };
 
@@ -1012,4 +1027,200 @@ export const getBroadcasts: RequestHandler = async (req, res): Promise<any> => {
         console.error('Error getting broadcasts:', error);
         return res.status(500).json({ error: 'Failed to get broadcasts' });
     }
-}
+};
+
+export const lockZone: RequestHandler = async (req, res): Promise<any> => {
+    const { zoneId } = req.body;
+    const wss = getSocket();
+
+    try {
+        const zone = await pclient.zone.update({
+            where: { id: zoneId },
+            data: { isLocked: true },
+            include: {
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            }
+        });
+
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ 
+                    event: 'zone-locked',
+                    data: {
+                        id: zone.id,
+                        name: zone.name,
+                        capturedBy: zone.capturedBy
+                    }
+                }));
+            }
+        });
+        return res.json({ success: true, message: 'Zone locked successfully' });
+    } catch (error) {
+        console.error('Error locking zone:', error);
+        return res.status(500).json({ error: 'Failed to lock zone' });
+    }
+};
+
+export const unlockZone: RequestHandler = async (req, res): Promise<any> => {
+    const { zoneId } = req.body;
+    const wss = getSocket();
+
+    try {
+        const zone = await pclient.zone.update({
+            where: { id: zoneId },
+            data: { isLocked: false },
+            include: {
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            }
+        });
+
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ 
+                    event: 'zone-unlocked',
+                    data: {
+                        id: zone.id,
+                        name: zone.name,
+                        capturedBy: zone.capturedBy
+                    }
+                }));
+            }
+        });
+        return res.json({ success: true, message: 'Zone unlocked successfully' });
+    } catch (error) {
+        console.error('Error unlocking zone:', error);
+        return res.status(500).json({ error: 'Failed to unlock zone' });
+    }
+};
+
+export const lockAllZones: RequestHandler = async (req, res): Promise<any> => {
+    const wss = getSocket();
+
+    try {
+        const zones = await pclient.zone.findMany({
+            include: {
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            }
+        });
+
+        await pclient.zone.updateMany({
+            data: { isLocked: true }
+        });
+
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                // Send all-zones-locked event first
+                client.send(JSON.stringify({ 
+                    event: 'all-zones-locked',
+                    data: {
+                        timestamp: new Date(),
+                        zoneCount: zones.length
+                    }
+                }));
+
+                // Then send individual zone updates
+                zones.forEach(zone => {
+                    client.send(JSON.stringify({ 
+                        event: 'zone-locked',
+                        data: {
+                            id: zone.id,
+                            name: zone.name,
+                            capturedBy: zone.capturedBy
+                        }
+                    }));
+                });
+            }
+        });
+
+        return res.json({ success: true, message: 'All zones locked successfully' });
+    } catch (error) {
+        console.error('Error locking all zones:', error);
+        return res.status(500).json({ error: 'Failed to lock all zones' });
+    }
+};
+
+export const unlockAllZones: RequestHandler = async (req, res): Promise<any> => {
+    const wss = getSocket();
+
+    try {
+        const zones = await pclient.zone.findMany({
+            include: {
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            }
+        });
+
+        await pclient.zone.updateMany({
+            data: { isLocked: false }
+        });
+
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                // Send all-zones-unlocked event first
+                client.send(JSON.stringify({ 
+                    event: 'all-zones-unlocked',
+                    data: {
+                        timestamp: new Date(),
+                        zoneCount: zones.length
+                    }
+                }));
+
+                // Then send individual zone updates
+                zones.forEach(zone => {
+                    client.send(JSON.stringify({ 
+                        event: 'zone-unlocked',
+                        data: {
+                            id: zone.id,
+                            name: zone.name,
+                            capturedBy: zone.capturedBy
+                        }
+                    }));
+                });
+            }
+        });
+
+        return res.json({ success: true, message: 'All zones unlocked successfully' });
+    } catch (error) {
+        console.error('Error unlocking all zones:', error);
+        return res.status(500).json({ error: 'Failed to unlock all zones' });
+    }
+};
+
+export const checkZoneLock: RequestHandler = async (req, res): Promise<any> => {
+    const { zoneId } = req.body;
+
+    try {
+        const zone = await pclient.zone.findUnique({
+            where: { id: zoneId },
+            select: { isLocked: true }
+        });
+
+        if (!zone) {
+            return res.status(404).json({ error: 'Zone not found' });
+        }
+
+        return res.json({ isLocked: zone.isLocked });
+    } catch (error) {
+        console.error('Error checking zone lock:', error);
+        return res.status(500).json({ error: 'Failed to check zone lock' });
+    }
+};

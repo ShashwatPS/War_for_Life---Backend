@@ -29,5 +29,10 @@ router.get("/broadcasts", typedHandler(publicController.getBroadcasts));
 router.post("/admin/zones/create", typedHandler(publicController.createZone));
 router.post("/admin/zones/update", typedHandler(publicController.updateZone));
 router.post("/admin/phases/create", typedHandler(publicController.createPhase));
+router.post("/admin/zones/lock", typedHandler(publicController.lockZone));
+router.post("/admin/zones/unlock", typedHandler(publicController.unlockZone));
+router.post("/admin/zones/lock-all", typedHandler(publicController.lockAllZones));
+router.post("/admin/zones/unlock-all", typedHandler(publicController.unlockAllZones));
+router.post("/admin/zones/check-lock", typedHandler(publicController.checkZoneLock));
 
 export default router;

@@ -23,7 +23,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getBroadcasts = exports.getZoneStatus = exports.getCurrentPhase = exports.checkLock = exports.getAvailableBuffs = exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
+exports.checkZoneLock = exports.unlockAllZones = exports.lockAllZones = exports.unlockZone = exports.lockZone = exports.getBroadcasts = exports.getZoneStatus = exports.getCurrentPhase = exports.checkLock = exports.getAvailableBuffs = exports.createPhase = exports.updateZone = exports.createZone = exports.changePhase = exports.getLeaderboard = exports.adminUnlockAllTeams = exports.adminLockAllTeams = exports.adminUnlockTeam = exports.adminLockTeam = exports.addPhaseQuestion = exports.answerQuestion = exports.getGameStatus = exports.broadcastMessage = exports.applyBuffDebuff = exports.getNextQuestion = exports.startPhase = void 0;
 const socketInstance_1 = require("../services/socketInstance");
 const client_1 = __importDefault(require("../db/client"));
 const socketService_1 = require("../services/socketService");
@@ -559,6 +559,20 @@ const adminLockTeam = (req, res) => __awaiter(void 0, void 0, void 0, function* 
     const wss = (0, socketInstance_1.getSocket)();
     try {
         const expiresAt = yield (0, buffDebuffs_1.lockTeam)(teamId, duration);
+        // Set up unlock timer
+        setTimeout(() => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                yield (0, buffDebuffs_1.unlockTeam)(teamId);
+                wss.clients.forEach(client => {
+                    if (client.readyState === ws_1.WebSocket.OPEN) {
+                        client.send(JSON.stringify({ event: 'team-unlocked', data: { teamId } }));
+                    }
+                });
+            }
+            catch (error) {
+                console.error('Error in auto unlock:', error);
+            }
+        }), duration * 60 * 1000);
         wss.clients.forEach(client => {
             if (client.readyState === ws_1.WebSocket.OPEN) {
                 client.send(JSON.stringify({ event: 'team-locked', data: { teamId, expiresAt } }));
@@ -647,7 +661,7 @@ const adminUnlockAllTeams = (req, res) => __awaiter(void 0, void 0, void 0, func
     }
     catch (error) {
         console.error('Error unlocking all teams:', error);
-        return res.status(500).json({ error: 'Failed to unlock teams' });
+        return res.status(500).json({ error: 'Failed to unlock all teams' });
     }
 });
 exports.adminUnlockAllTeams = adminUnlockAllTeams;
@@ -893,3 +907,187 @@ const getBroadcasts = (req, res) => __awaiter(void 0, void 0, void 0, function* 
     }
 });
 exports.getBroadcasts = getBroadcasts;
+const lockZone = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { zoneId } = req.body;
+    const wss = (0, socketInstance_1.getSocket)();
+    try {
+        const zone = yield client_1.default.zone.update({
+            where: { id: zoneId },
+            data: { isLocked: true },
+            include: {
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            }
+        });
+        wss.clients.forEach(client => {
+            if (client.readyState === ws_1.WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                    event: 'zone-locked',
+                    data: {
+                        id: zone.id,
+                        name: zone.name,
+                        capturedBy: zone.capturedBy
+                    }
+                }));
+            }
+        });
+        return res.json({ success: true, message: 'Zone locked successfully' });
+    }
+    catch (error) {
+        console.error('Error locking zone:', error);
+        return res.status(500).json({ error: 'Failed to lock zone' });
+    }
+});
+exports.lockZone = lockZone;
+const unlockZone = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { zoneId } = req.body;
+    const wss = (0, socketInstance_1.getSocket)();
+    try {
+        const zone = yield client_1.default.zone.update({
+            where: { id: zoneId },
+            data: { isLocked: false },
+            include: {
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            }
+        });
+        wss.clients.forEach(client => {
+            if (client.readyState === ws_1.WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                    event: 'zone-unlocked',
+                    data: {
+                        id: zone.id,
+                        name: zone.name,
+                        capturedBy: zone.capturedBy
+                    }
+                }));
+            }
+        });
+        return res.json({ success: true, message: 'Zone unlocked successfully' });
+    }
+    catch (error) {
+        console.error('Error unlocking zone:', error);
+        return res.status(500).json({ error: 'Failed to unlock zone' });
+    }
+});
+exports.unlockZone = unlockZone;
+const lockAllZones = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const wss = (0, socketInstance_1.getSocket)();
+    try {
+        const zones = yield client_1.default.zone.findMany({
+            include: {
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            }
+        });
+        yield client_1.default.zone.updateMany({
+            data: { isLocked: true }
+        });
+        wss.clients.forEach(client => {
+            if (client.readyState === ws_1.WebSocket.OPEN) {
+                // Send all-zones-locked event first
+                client.send(JSON.stringify({
+                    event: 'all-zones-locked',
+                    data: {
+                        timestamp: new Date(),
+                        zoneCount: zones.length
+                    }
+                }));
+                // Then send individual zone updates
+                zones.forEach(zone => {
+                    client.send(JSON.stringify({
+                        event: 'zone-locked',
+                        data: {
+                            id: zone.id,
+                            name: zone.name,
+                            capturedBy: zone.capturedBy
+                        }
+                    }));
+                });
+            }
+        });
+        return res.json({ success: true, message: 'All zones locked successfully' });
+    }
+    catch (error) {
+        console.error('Error locking all zones:', error);
+        return res.status(500).json({ error: 'Failed to lock all zones' });
+    }
+});
+exports.lockAllZones = lockAllZones;
+const unlockAllZones = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const wss = (0, socketInstance_1.getSocket)();
+    try {
+        const zones = yield client_1.default.zone.findMany({
+            include: {
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            }
+        });
+        yield client_1.default.zone.updateMany({
+            data: { isLocked: false }
+        });
+        wss.clients.forEach(client => {
+            if (client.readyState === ws_1.WebSocket.OPEN) {
+                // Send all-zones-unlocked event first
+                client.send(JSON.stringify({
+                    event: 'all-zones-unlocked',
+                    data: {
+                        timestamp: new Date(),
+                        zoneCount: zones.length
+                    }
+                }));
+                // Then send individual zone updates
+                zones.forEach(zone => {
+                    client.send(JSON.stringify({
+                        event: 'zone-unlocked',
+                        data: {
+                            id: zone.id,
+                            name: zone.name,
+                            capturedBy: zone.capturedBy
+                        }
+                    }));
+                });
+            }
+        });
+        return res.json({ success: true, message: 'All zones unlocked successfully' });
+    }
+    catch (error) {
+        console.error('Error unlocking all zones:', error);
+        return res.status(500).json({ error: 'Failed to unlock all zones' });
+    }
+});
+exports.unlockAllZones = unlockAllZones;
+const checkZoneLock = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { zoneId } = req.body;
+    try {
+        const zone = yield client_1.default.zone.findUnique({
+            where: { id: zoneId },
+            select: { isLocked: true }
+        });
+        if (!zone) {
+            return res.status(404).json({ error: 'Zone not found' });
+        }
+        return res.json({ isLocked: zone.isLocked });
+    }
+    catch (error) {
+        console.error('Error checking zone lock:', error);
+        return res.status(500).json({ error: 'Failed to check zone lock' });
+    }
+});
+exports.checkZoneLock = checkZoneLock;

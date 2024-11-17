@@ -88,4 +88,30 @@ export async function emitTeamsList(wss: WebSocketServer, prisma: PrismaClient) 
     }
 }
 
+export async function emitZoneStatus(wss: WebSocketServer, prisma: PrismaClient) {
+    try {
+        const zones = await prisma.zone.findMany({
+            select: {
+                id: true,
+                name: true,
+                isLocked: true,
+                capturedBy: {
+                    select: {
+                        id: true,
+                        teamName: true
+                    }
+                }
+            }
+        });
+
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ event: 'zones-update', data: zones }));
+            }
+        });
+    } catch (err) {
+        console.error('Error emitting zone status:', err);
+    }
+}
+
 export default socketService;

@@ -11,6 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.emitLeaderboard = emitLeaderboard;
 exports.emitTeamsList = emitTeamsList;
+exports.emitZoneStatus = emitZoneStatus;
 const ws_1 = require("ws");
 const socketService = (wss, prisma) => {
     wss.on('connection', (ws) => {
@@ -96,6 +97,33 @@ function emitTeamsList(wss, prisma) {
         }
         catch (err) {
             console.error('Error emitting teams list:', err);
+        }
+    });
+}
+function emitZoneStatus(wss, prisma) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const zones = yield prisma.zone.findMany({
+                select: {
+                    id: true,
+                    name: true,
+                    isLocked: true,
+                    capturedBy: {
+                        select: {
+                            id: true,
+                            teamName: true
+                        }
+                    }
+                }
+            });
+            wss.clients.forEach(client => {
+                if (client.readyState === ws_1.WebSocket.OPEN) {
+                    client.send(JSON.stringify({ event: 'zones-update', data: zones }));
+                }
+            });
+        }
+        catch (err) {
+            console.error('Error emitting zone status:', err);
         }
     });
 }
