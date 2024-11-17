@@ -390,7 +390,6 @@ const answerQuestion = (req, res) => __awaiter(void 0, void 0, void 0, function*
                                             data: {
                                                 zoneId,
                                                 teamId,
-                                                zoneName: zone.name,
                                                 teamName: team.teamName,
                                                 phase: 'PHASE_1',
                                                 timestamp: new Date()

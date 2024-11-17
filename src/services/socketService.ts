@@ -106,7 +106,17 @@ export async function emitZoneStatus(wss: WebSocketServer, prisma: PrismaClient)
 
         wss.clients.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({ event: 'zones-update', data: zones }));
+                zones.forEach(zone => {
+                    client.send(JSON.stringify({ 
+                        event: 'zone-status-update', 
+                        data: {
+                            id: zone.id,
+                            name: zone.name,
+                            isLocked: zone.isLocked,
+                            capturedBy: zone.capturedBy
+                        }
+                    }));
+                });
             }
         });
     } catch (err) {

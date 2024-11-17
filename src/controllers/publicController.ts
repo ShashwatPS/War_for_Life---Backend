@@ -441,8 +441,14 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                             ]);
 
                             const [total, answered] = zoneQuestions;
+// ...existing code...
                             if (answered + 1 >= total) {
                                 // All zone questions completed, capture zone
+                                const zone = await pclient.zone.findUnique({
+                                    where: { id: zoneId },
+                                    select: { name: true }
+                                });
+
                                 transactions.push(
                                     pclient.zone.update({
                                         where: { id: zoneId },
@@ -462,6 +468,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                                                 zoneId,
                                                 teamId,
                                                 teamName: team.teamName,
+                                                zoneName: zone?.name,
                                                 phase: 'PHASE_1',
                                                 timestamp: new Date()
                                             }
@@ -497,6 +504,11 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                                 })
                             );
 
+                            const zone = await pclient.zone.findUnique({
+                                where: { id: zoneId },
+                                select: { name: true }
+                            });
+
                             // Then capture the new zone
                             transactions.push(
                                 pclient.zone.update({
@@ -517,6 +529,7 @@ export const answerQuestion: RequestHandler = async (req, res): Promise<any> => 
                                             zoneId,
                                             teamId,
                                             teamName: team.teamName,
+                                            zoneName: zone?.name,
                                             phase: 'PHASE_2',
                                             timestamp: new Date()
                                         }
@@ -824,6 +837,38 @@ export const changePhase: RequestHandler = async (req, res): Promise<any> => {
         startTime: updatedPhase.startTime,
         message: `Phase changed to ${phase}`
     };
+    if (phase === 'PHASE_3') {
+        const teamsWithZones = await pclient.team.findMany({
+            where: {
+                capturedZones: {
+                    some: {}
+                }
+            },
+            select: {
+                id: true,
+                teamName: true,
+                capturedZones: {
+                    select: {
+                        id: true,
+                        name: true
+                    }
+                }
+            }
+        });
+
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ 
+                    event: 'phase3-eligible-teams',
+                    data: {
+                        teams: teamsWithZones,
+                        message: 'Teams eligible for Phase 3',
+                        timestamp: new Date()
+                    }
+                }));
+            }
+        });
+    }
 
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
